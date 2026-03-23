@@ -1,11 +1,14 @@
 const app = getApp();
 
+let lastScrollY = 0;
+
 Page({
   data: {
     imageUrl: '',
     imageId: '',
     dislikeCount: 0,
     userInfo: null,
+    scrollThreshold: 100,
   },
 
   onLoad() {
@@ -49,8 +52,14 @@ Page({
     });
   },
 
-  onSwipe() {
-    this.loadRandomImage();
+  onPageScroll(e) {
+    const currentY = e.scrollTop;
+    if (currentY > lastScrollY + this.data.scrollThreshold) {
+      lastScrollY = currentY;
+      this.loadRandomImage();
+    } else if (currentY < lastScrollY - this.data.scrollThreshold) {
+      lastScrollY = currentY;
+    }
   },
 
   onDislike() {
