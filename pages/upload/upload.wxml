@@ -1,0 +1,22 @@
+<view class="container">
+  <view class="upload-area" bindtap="chooseImage">
+    <text class="upload-icon">+</text>
+    <text class="upload-text">点击选择图片</text>
+    <text class="upload-hint">支持单张或批量选择</text>
+  </view>
+
+  <view class="preview-list" wx:if="{{images.length > 0}}">
+    <view class="preview-item" wx:for="{{images}}" wx:key="index">
+      <image src="{{item}}" mode="aspectFill" />
+      <view class="remove-btn" bindtap="removeImage" data-index="{{index}}">×</view>
+    </view>
+  </view>
+
+  <view class="upload-btn" bindtap="uploadImages" wx:if="{{images.length > 0}}">
+    <text>上传 {{images.length}} 张图片</text>
+  </view>
+
+  <view class="tips">
+    <text>提示：图片将自动审核通过后展示</text>
+  </view>
+</view>

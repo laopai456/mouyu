@@ -1,0 +1,14 @@
+<view class="container">
+  <view class="card">
+    <image class="meme-image" src="{{imageUrl}}" mode="aspectFit" bindtap="onSwipe" />
+    <view class="action-bar">
+      <view class="dislike-btn" bindtap="onDislike">
+        <text class="dislike-icon">💩</text>
+        <text class="dislike-count">{{dislikeCount}}</text>
+      </view>
+    </view>
+  </view>
+  <view class="upload-btn" bindtap="goUpload">
+    <text>上传图片</text>
+  </view>
+</view>

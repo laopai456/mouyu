@@ -1,0 +1,4 @@
+node_modules/
+.cloudfunction/
+*.log
+.DS_Store
