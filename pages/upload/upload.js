@@ -6,19 +6,6 @@ Page({
     uploading: false,
   },
 
-  onLoad() {
-    this.getUserInfo();
-  },
-
-  getUserInfo() {
-    wx.getUserProfile({
-      desc: '用于记录上传者',
-      success: (res) => {
-        this.setData({ userInfo: res.userInfo });
-      }
-    });
-  },
-
   chooseImage() {
     wx.chooseMedia({
       count: 9,
@@ -39,7 +26,7 @@ Page({
     this.setData({ images: this.data.images });
   },
 
-  uploadImages() {
+  async uploadImages() {
     if (this.data.uploading) return;
     if (this.data.images.length === 0) {
       wx.showToast({ title: '请先选择图片', icon: 'none' });
@@ -50,48 +37,62 @@ Page({
     wx.showLoading({ title: '上传中...' });
 
     let uploaded = 0;
-    const total = this.data.images.length;
+    let failed = 0;
 
-    this.data.images.forEach((path, index) => {
-      wx.cloud.uploadFile({
-        cloudPath: `memes/${Date.now()}_${index}.jpg`,
-        filePath: path,
-        success: (res) => {
+    for (const path of this.data.images) {
+      try {
+        const uploadRes = await new Promise((resolve, reject) => {
+          wx.cloud.uploadFile({
+            cloudPath: `memes/${Date.now()}_${Math.random().toString(36).substr(2, 9)}.jpg`,
+            filePath: path,
+            success: resolve,
+            fail: reject
+          });
+        });
+
+        const addRes = await new Promise((resolve, reject) => {
           wx.cloud.callFunction({
             name: 'addImage',
-            data: {
-              fileID: res.fileID,
-              openid: this.data.userInfo?.openId || 'test'
-            },
-            success: (r) => {
-              uploaded++;
-              if (uploaded === total) {
-                wx.hideLoading();
-                wx.showToast({ title: '上传成功', icon: 'success' });
-                this.setData({ images: [], uploading: false });
-              }
-            },
-            fail: (err) => {
-              uploaded++;
-              console.error('添加记录失败', err);
-              if (uploaded === total) {
-                wx.hideLoading();
-                wx.showToast({ title: '部分上传失败', icon: 'none' });
-                this.setData({ uploading: false });
-              }
-            }
+            data: { fileID: uploadRes.fileID },
+            success: resolve,
+            fail: reject
           });
-        },
-        fail: (err) => {
-          uploaded++;
-          console.error('上传失败', err);
-          if (uploaded === total) {
+        });
+
+        if (!addRes.result?.success) {
+          failed++;
+          if (addRes.result?.msg) {
             wx.hideLoading();
-            wx.showToast({ title: '上传失败', icon: 'none' });
+            wx.showToast({ title: addRes.result.msg, icon: 'none', duration: 2000 });
             this.setData({ uploading: false });
+            return;
           }
         }
+        uploaded++;
+      } catch (err) {
+        failed++;
+        console.error('上传失败', err);
+      }
+    }
+
+    wx.hideLoading();
+    
+    if (failed === 0) {
+      wx.showModal({
+        title: '上传成功',
+        content: '图片已提交，审核通过后将展示',
+        showCancel: false,
+        success: () => {
+          this.setData({ images: [] });
+          wx.navigateBack();
+        }
       });
-    });
+    } else if (uploaded > 0) {
+      wx.showToast({ title: `${uploaded}张成功，${failed}张失败`, icon: 'none' });
+    } else {
+      wx.showToast({ title: '上传失败', icon: 'none' });
+    }
+    
+    this.setData({ uploading: false });
   },
 });
