@@ -1,7 +1,8 @@
 {
   "pages": [
     "pages/index/index",
-    "pages/upload/upload"
+    "pages/upload/upload",
+    "pages/admin/admin"
   ],
   "window": {
     "navigationBarBackgroundColor": "#ffffff",

@@ -1,14 +1,40 @@
 <view class="container">
-  <view class="card">
-    <image class="meme-image" src="{{imageUrl}}" mode="aspectFit" />
-    <view class="action-bar">
-      <view class="dislike-btn" bindtap="onDislike">
-        <text class="dislike-icon">💩</text>
-        <text class="dislike-count">{{dislikeCount}}</text>
+  <scroll-view 
+    class="image-area" 
+    scroll-y 
+    enhanced 
+    show-scrollbar="{{false}}"
+    refresher-enabled
+    refresher-triggered="{{isRefreshing}}"
+    bindrefresherrefresh="onRefresh"
+  >
+    <view class="image-wrapper">
+      <block wx:if="{{noMoreImages}}">
+        <view class="no-more">
+          <text class="no-more-text">上会儿班吧，球球了。</text>
+        </view>
+      </block>
+      <block wx:else>
+        <image class="meme-image" src="{{imageUrl}}" mode="widthFix" />
+      </block>
+    </view>
+  </scroll-view>
+
+  <view class="header">
+    <view class="header-left">
+      <view class="like-btn" bindtap="onLike">
+        <text class="like-icon">🌸</text>
+        <text class="action-count">1</text>
       </view>
+      <text class="slogan" bindtap="onTitleTap">热爱可抵漫长岁月</text>
+    </view>
+    <view class="upload-btn" bindtap="goUpload">
+      <text>+</text>
     </view>
   </view>
-  <view class="upload-btn" bindtap="goUpload">
-    <text>上传图片</text>
+
+  <view class="dislike-btn" bindtap="onDislike" wx:if="{{!noMoreImages}}">
+    <text class="dislike-icon">💩</text>
+    <text class="action-count">3</text>
   </view>
 </view>

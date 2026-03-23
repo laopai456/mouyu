@@ -6,7 +6,9 @@ const db = cloud.database();
 
 exports.main = async (event, context) => {
   try {
-    const { imageId, openid } = event;
+    const { imageId } = event;
+    const { OPENID } = cloud.getWXContext();
+    const openid = OPENID;
     const today = new Date().toISOString().split('T')[0];
 
     const logRes = await db.collection('dislike_logs')
