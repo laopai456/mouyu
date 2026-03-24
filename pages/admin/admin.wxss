@@ -9,6 +9,33 @@ page {
   height: 100vh;
 }
 
+.openid-section {
+  background: #fff;
+  padding: 24rpx 30rpx;
+  border-bottom: 1rpx solid #eee;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.openid-label {
+  font-size: 28rpx;
+  color: #333;
+}
+
+.openid-value {
+  font-size: 24rpx;
+  color: #667eea;
+  word-break: break-all;
+  flex: 1;
+}
+
+.openid-tip {
+  font-size: 22rpx;
+  color: #999;
+  margin-left: 10rpx;
+}
+
 .tabs {
   display: flex;
   background: #fff;

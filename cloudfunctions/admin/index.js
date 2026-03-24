@@ -4,12 +4,30 @@ cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 
 const db = cloud.database();
 
-const ADMIN_OPENIDS = [
+const DEVELOPER_OPENIDS = [
   'oWatD3bwu0aVaFTPvrrerAU_C2zY'
 ];
 
-function isAdmin(openid) {
-  return ADMIN_OPENIDS.includes(openid);
+const CREATOR_OPENIDS = [
+  'oWatD3bwu0aVaFTPvrrerAU_C2zY'
+];
+
+function isDeveloper(openid) {
+  return DEVELOPER_OPENIDS.includes(openid);
+}
+
+function isCreator(openid) {
+  return CREATOR_OPENIDS.includes(openid);
+}
+
+function canUpload(openid) {
+  return isCreator(openid) || isDeveloper(openid);
+}
+
+function getUserRole(openid) {
+  if (isDeveloper(openid)) return 'developer';
+  if (isCreator(openid)) return 'creator';
+  return 'user';
 }
 
 exports.main = async (event, context) => {
@@ -18,10 +36,14 @@ exports.main = async (event, context) => {
 
   try {
     if (action === 'checkAdmin') {
-      return { isAdmin: isAdmin(OPENID), openid: OPENID };
+      return { isAdmin: isDeveloper(OPENID), openid: OPENID };
     }
 
-    if (!isAdmin(OPENID)) {
+    if (action === 'checkUpload') {
+      return { canUpload: canUpload(OPENID), openid: OPENID, role: getUserRole(OPENID) };
+    }
+
+    if (!isDeveloper(OPENID)) {
       return { success: false, msg: '无权限操作', noPermission: true };
     }
 

@@ -28,7 +28,7 @@
       </view>
       <text class="slogan" bindtap="onTitleTap">热爱可抵漫长岁月</text>
     </view>
-    <view class="upload-btn" bindtap="goUpload">
+    <view class="upload-btn" bindtap="goUpload" wx:if="{{canUpload}}">
       <text>+</text>
     </view>
   </view>

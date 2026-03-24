@@ -1,5 +1,11 @@
 <view class="container">
-  <view class="tabs">
+  <view class="openid-section">
+    <text class="openid-label">我的ID：</text>
+    <text class="openid-value" bindtap="copyOpenid">{{openid}}</text>
+    <text class="openid-tip" bindtap="copyOpenid">（点击复制）</text>
+  </view>
+
+  <view class="tabs" wx:if="{{isAdmin}}">
     <view class="tab {{currentTab === 0 ? 'active' : ''}}" bindtap="switchTab" data-tab="0">待审核 ({{pendingCount}})</view>
     <view class="tab {{currentTab === 1 ? 'active' : ''}}" bindtap="switchTab" data-tab="1">已通过</view>
     <view class="tab {{currentTab === 2 ? 'active' : ''}}" bindtap="switchTab" data-tab="2">已拒绝</view>
