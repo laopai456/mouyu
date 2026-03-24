@@ -58,6 +58,11 @@
     .list-item .info { flex: 1; }
     .list-item .info .time { font-size: 12px; color: #999; }
     .list-item .actions { display: flex; gap: 10px; }
+    .list-item .checkbox { margin-right: 10px; }
+    .list-item .checkbox input { width: 18px; height: 18px; cursor: pointer; }
+    
+    .batch-actions { display: flex; gap: 10px; margin-bottom: 15px; align-items: center; }
+    .batch-actions .selected-count { color: #666; font-size: 14px; }
     
     .empty { text-align: center; padding: 40px; color: #999; }
     
@@ -268,25 +273,94 @@
           return;
         }
         
-        listEl.innerHTML = res.data.map(item => `
-          <div class="list-item">
-            <img src="${item.url}" onclick="previewImage('${item.url}')" style="cursor:pointer">
-            <div class="info">
-              <div class="time">${formatTime(item.createTime)}</div>
-              <div style="margin-top:5px;color:#666;font-size:12px">🌸 ${item.likeCount || 0} | 💩 ${item.dislikeCount || 0}</div>
-            </div>
-            ${status === 0 ? `
-              <div class="actions">
-                <button class="btn btn-success" onclick="reviewImage('${item._id}', 1)">通过</button>
-                <button class="btn btn-danger" onclick="reviewImage('${item._id}', 2)">拒绝</button>
-              </div>
-            ` : ''}
+        listEl.innerHTML = `
+          <div class="batch-actions">
+            <label><input type="checkbox" onchange="toggleSelectAll(this, ${status})"> 全选</label>
+            <button class="btn btn-danger" onclick="batchDelete(${status})">批量删除</button>
+            <span class="selected-count" id="selectedCount-${status}">已选择 0 张</span>
           </div>
-        `).join('');
+          <div class="image-grid">
+            ${res.data.map(item => `
+              <div class="list-item" data-id="${item._id}" data-status="${status}">
+                <div class="checkbox">
+                  <input type="checkbox" class="image-checkbox" data-id="${item._id}" data-status="${status}" onchange="updateSelectedCount(${status})">
+                </div>
+                <img src="${item.url}" onclick="previewImage('${item.url}')" style="cursor:pointer">
+                <div class="info">
+                  <div class="time">${formatTime(item.createTime)}</div>
+                  <div style="margin-top:5px;color:#666;font-size:12px">🌸 ${item.likeCount || 0} | 💩 ${item.dislikeCount || 0}</div>
+                </div>
+                ${status === 0 ? `
+                  <div class="actions">
+                    <button class="btn btn-success" onclick="reviewImage('${item._id}', 1)">通过</button>
+                    <button class="btn btn-danger" onclick="reviewImage('${item._id}', 2)">拒绝</button>
+                  </div>
+                ` : `
+                  <button class="btn btn-danger" onclick="deleteImage('${item._id}', ${status})">删除</button>
+                `}
+              </div>
+            `).join('')}
+          </div>
+        `;
       } catch (err) {
         console.error('加载图片失败', err);
         listEl.innerHTML = '<div class="empty">加载失败</div>';
       }
+    }
+    
+    function toggleSelectAll(checkbox, status) {
+      const checkboxes = document.querySelectorAll(`.image-checkbox[data-status="${status}"]`);
+      checkboxes.forEach(cb => cb.checked = checkbox.checked);
+      updateSelectedCount(status);
+    }
+    
+    function updateSelectedCount(status) {
+      const checkboxes = document.querySelectorAll(`.image-checkbox[data-status="${status}"]:checked`);
+      const countEl = document.getElementById(`selectedCount-${status}`);
+      if (countEl) {
+        countEl.textContent = `已选择 ${checkboxes.length} 张`;
+      }
+    }
+    
+    async function deleteImage(imageId, status) {
+      if (!confirm('确定要删除这张图片吗？')) return;
+      
+      try {
+        await db.collection('images').doc(imageId).remove();
+        loadImages(status);
+        loadStats();
+        alert('删除成功');
+      } catch (err) {
+        alert('删除失败：' + err.message);
+      }
+    }
+    
+    async function batchDelete(status) {
+      const checkboxes = document.querySelectorAll(`.image-checkbox[data-status="${status}"]:checked`);
+      if (checkboxes.length === 0) {
+        alert('请先选择要删除的图片');
+        return;
+      }
+      
+      if (!confirm(`确定要删除选中的 ${checkboxes.length} 张图片吗？`)) return;
+      
+      const ids = Array.from(checkboxes).map(cb => cb.dataset.id);
+      let successCount = 0;
+      let failCount = 0;
+      
+      for (const id of ids) {
+        try {
+          await db.collection('images').doc(id).remove();
+          successCount++;
+        } catch (err) {
+          console.error('删除失败', id, err);
+          failCount++;
+        }
+      }
+      
+      alert(`删除完成\n成功: ${successCount}\n失败: ${failCount}`);
+      loadImages(status);
+      loadStats();
     }
     
     function formatTime(timestamp) {

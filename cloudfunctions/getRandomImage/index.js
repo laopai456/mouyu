@@ -57,6 +57,33 @@ exports.main = async (event, context) => {
     }
 
     if (images.length > 0) {
+      const fileIDs = images.map(img => img.url).filter(url => url);
+      
+      if (fileIDs.length > 0) {
+        try {
+          const tempUrlResult = await cloud.getTempFileURL({
+            fileList: fileIDs
+          });
+          
+          const urlMap = {};
+          if (tempUrlResult.fileList) {
+            tempUrlResult.fileList.forEach(item => {
+              if (item.tempFileURL) {
+                urlMap[item.fileID] = item.tempFileURL;
+              }
+            });
+          }
+          
+          images.forEach(img => {
+            if (urlMap[img.url]) {
+              img.tempUrl = urlMap[img.url];
+            }
+          });
+        } catch (err) {
+          console.error('获取临时链接失败', err);
+        }
+      }
+      
       return { success: true, images: images };
     }
 

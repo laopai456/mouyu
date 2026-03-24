@@ -60,7 +60,7 @@ exports.main = async (event, context) => {
         url: fileID,
         md5: md5 || '',
         uploaderOpenid: OPENID,
-        status: 0,
+        status: 1,
         dislikeCount: 0,
         likeCount: 0,
         date: today,
@@ -68,7 +68,7 @@ exports.main = async (event, context) => {
       }
     });
 
-    return { success: true, msg: '上传成功，等待审核后展示' };
+    return { success: true, msg: '上传成功' };
   } catch (err) {
     return { success: false, msg: err.message };
   }
