@@ -15,6 +15,7 @@ Page({
     isRefreshing: false,
     noMoreImages: false,
     hasLikedToday: false,
+    canUpload: false,
   },
 
   imageQueue: [],
@@ -24,7 +25,23 @@ Page({
 
   onLoad() {
     this.checkLikeStatus();
+    this.checkUploadPermission();
     this.initImages();
+  },
+
+  checkUploadPermission() {
+    wx.cloud.callFunction({
+      name: 'admin',
+      data: { action: 'checkUpload' },
+      success: (res) => {
+        if (res.result && res.result.canUpload) {
+          this.setData({ canUpload: true });
+        }
+      },
+      fail: (err) => {
+        console.error('检查上传权限失败', err);
+      }
+    });
   },
 
   checkLikeStatus() {

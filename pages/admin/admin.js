@@ -5,6 +5,7 @@ Page({
     pendingCount: 0,
     isAdmin: false,
     loading: true,
+    openid: '',
   },
 
   onLoad() {
@@ -25,19 +26,30 @@ Page({
       });
       
       const isAdmin = res.result?.isAdmin || false;
+      const openid = res.result?.openid || '';
       
-      if (!isAdmin) {
-        wx.showToast({ title: '无权限访问', icon: 'none' });
-        setTimeout(() => wx.navigateBack(), 1500);
-      } else {
-        this.setData({ isAdmin: true, loading: false });
+      this.setData({ 
+        isAdmin, 
+        openid,
+        loading: false 
+      });
+      
+      if (isAdmin) {
         this.loadImages();
       }
     } catch (err) {
       console.error(err);
-      wx.showToast({ title: '验证失败', icon: 'none' });
-      setTimeout(() => wx.navigateBack(), 1500);
+      this.setData({ loading: false });
     }
+  },
+
+  copyOpenid() {
+    wx.setClipboardData({
+      data: this.data.openid,
+      success: () => {
+        wx.showToast({ title: '已复制', icon: 'success' });
+      }
+    });
   },
 
   switchTab(e) {
