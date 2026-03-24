@@ -53,19 +53,26 @@ Page({
   async initImages() {
     this.setData({ isLoading: true });
     try {
+      console.log('开始获取图片...');
       const images = await this.fetchImages(PRELOAD_COUNT);
+      console.log('获取到的图片:', images);
       if (images && images.length > 0) {
         this.imageQueue = images;
         this.showNextImage();
+      } else {
+        console.log('没有获取到图片');
+        this.setData({ noMoreImages: true });
       }
     } catch (err) {
       console.error('初始化图片失败', err);
+      wx.showToast({ title: '加载失败: ' + err.message, icon: 'none', duration: 3000 });
     }
     this.setData({ isLoading: false });
   },
 
   fetchImages(count) {
     return new Promise((resolve, reject) => {
+      console.log('调用云函数 getRandomImage, count:', count, 'seenIds:', this.seenIds.length);
       wx.cloud.callFunction({
         name: 'getRandomImage',
         data: { 
@@ -73,6 +80,7 @@ Page({
           seenIds: this.seenIds 
         },
         success: (res) => {
+          console.log('云函数返回:', res);
           if (res.result && res.result.success) {
             if (res.result.images) {
               resolve(res.result.images);
@@ -91,6 +99,7 @@ Page({
           }
         },
         fail: (err) => {
+          console.error('云函数调用失败:', err);
           reject(err);
         }
       });
@@ -105,8 +114,10 @@ Page({
     const image = this.imageQueue.shift();
     this.seenIds.push(image._id);
     
+    const displayUrl = image.tempUrl || image.url;
+    
     this.setData({
-      imageUrl: image.url,
+      imageUrl: displayUrl,
       imageId: image._id,
       dislikeCount: image.dislikeCount || 0,
       likeCount: image.likeCount || 0,
@@ -252,5 +263,15 @@ Page({
 
   goUpload() {
     wx.navigateTo({ url: '/pages/upload/upload' });
+  },
+
+  onImageLoad(e) {
+    console.log('图片加载成功', e);
+  },
+
+  onImageError(e) {
+    console.error('图片加载失败', e);
+    console.error('当前图片URL:', this.data.imageUrl);
+    wx.showToast({ title: '图片加载失败', icon: 'none' });
   },
 });

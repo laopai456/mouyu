@@ -15,7 +15,13 @@
         </view>
       </block>
       <block wx:else>
-        <image class="meme-image" src="{{imageUrl}}" mode="widthFix" />
+        <image 
+          class="meme-image" 
+          src="{{imageUrl}}" 
+          mode="widthFix" 
+          binderror="onImageError"
+          bindload="onImageLoad"
+        />
       </block>
     </view>
   </scroll-view>
