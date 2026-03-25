@@ -90,9 +90,9 @@
       margin: auto;
       display: block;
       max-width: 90%;
-      max-height: 90%;
+      max-height: 80%;
       position: absolute;
-      top: 50%;
+      top: 45%;
       left: 50%;
       transform: translate(-50%, -50%);
     }
@@ -118,12 +118,48 @@
       font-size: 14px;
       text-align: center;
     }
+    .modal-nav {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #fff;
+      font-size: 50px;
+      font-weight: bold;
+      cursor: pointer;
+      user-select: none;
+      padding: 20px;
+      z-index: 1001;
+      transition: opacity 0.2s;
+    }
+    .modal-nav:hover {
+      opacity: 0.7;
+    }
+    .modal-prev {
+      left: 20px;
+    }
+    .modal-next {
+      right: 20px;
+    }
+    .modal-actions {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
+    }
+    .modal-actions .btn {
+      padding: 8px 20px;
+    }
   </style>
 </head>
 <body>
   <!-- 图片预览模态框 -->
-  <div id="imageModal" class="modal" onclick="closeModal(event)">
+  <div id="imageModal" class="modal">
     <span class="modal-close" onclick="closeModal()">&times;</span>
+    <span class="modal-nav modal-prev" onclick="prevImage()">&#10094;</span>
+    <span class="modal-nav modal-next" onclick="nextImage()">&#10095;</span>
+    <div class="modal-actions" id="modalActions"></div>
     <img class="modal-content" id="modalImage">
     <div class="modal-info" id="modalInfo"></div>
   </div>
@@ -219,7 +255,9 @@
     let db = null;
     let currentUser = null;
     let selectedFiles = [];
-    let currentYearMonth = null; // 当前选择的月份
+    let currentYearMonth = null;
+    let previewImages = [];
+    let previewIndex = 0;
     
     // 将 cloud:// URL 转换为 https:// URL
     function transformCloudUrl(cloudUrl) {
@@ -367,17 +405,8 @@
       listEl.innerHTML = '<div class="loading">加载中...</div>';
       
       try {
-        let query = db.collection('images').where({ status });
-        
-        // 如果选择了月份，按月份筛选
-        if (currentYearMonth) {
-          query = db.collection('images').where({ 
-            status,
-            yearMonth: currentYearMonth 
-          });
-        }
-        
-        const res = await query
+        const res = await db.collection('images')
+          .where({ status })
           .orderBy('createTime', 'desc')
           .limit(50)
           .get();
@@ -429,6 +458,15 @@
         
         console.log('最终 URL 映射表:', urlMap);
         
+        previewImages = res.data.map(item => ({
+          id: item._id,
+          url: urlMap[item.url] || item.url,
+          status: status,
+          likeCount: item.likeCount || 0,
+          dislikeCount: item.dislikeCount || 0,
+          createTime: item.createTime
+        }));
+        
         listEl.innerHTML = `
           <div class="batch-actions">
             <label><input type="checkbox" onchange="toggleSelectAll(this, ${status})"> 全选</label>
@@ -436,12 +474,12 @@
             <span class="selected-count" id="selectedCount-${status}">已选择 0 张</span>
           </div>
           <div class="image-grid">
-            ${res.data.map(item => `
+            ${res.data.map((item, index) => `
               <div class="list-item" data-id="${item._id}" data-status="${status}">
                 <div class="checkbox">
                   <input type="checkbox" class="image-checkbox" data-id="${item._id}" data-status="${status}" onchange="updateSelectedCount(${status})">
                 </div>
-                <img src="${urlMap[item.url] || item.url}" onclick="previewImage('${urlMap[item.url] || item.url}')" style="cursor:pointer">
+                <img src="${urlMap[item.url] || item.url}" onclick="previewImage(${index}, ${status})" style="cursor:pointer">
                 <div class="info">
                   <div class="time">${formatTime(item.createTime)}</div>
                   <div style="margin-top:5px;color:#666;font-size:12px">🌸 ${item.likeCount || 0} | 💩 ${item.dislikeCount || 0}</div>
@@ -545,7 +583,7 @@
       try {
         await app.callFunction({
           name: 'admin',
-          data: { action: 'review', imageId, status }
+          data: { action: 'review', imageId, status, adminOpenid: currentUser.openid }
         });
         loadImages(0);
         loadStats();
@@ -554,20 +592,137 @@
       }
     }
     
-    function previewImage(url) {
+    function previewImage(index, status) {
+      previewIndex = index;
+      updatePreviewModal();
+    }
+    
+    function updatePreviewModal() {
       const modal = document.getElementById('imageModal');
       const modalImg = document.getElementById('modalImage');
       const modalInfo = document.getElementById('modalInfo');
+      const modalActions = document.getElementById('modalActions');
       
-      modalImg.src = url;
-      modalInfo.textContent = '点击任意位置关闭';
+      const current = previewImages[previewIndex];
+      if (!current) return;
+      
+      modalImg.src = current.url;
+      modalInfo.textContent = `${previewIndex + 1} / ${previewImages.length} | 🌸 ${current.likeCount} | 💩 ${current.dislikeCount}`;
+      
+      let actionsHtml = '';
+      if (current.status === 0) {
+        actionsHtml = `
+          <button class="btn btn-success" onclick="reviewFromPreview(1)">通过</button>
+          <button class="btn btn-danger" onclick="reviewFromPreview(2)">拒绝</button>
+        `;
+      } else {
+        actionsHtml = `<button class="btn btn-danger" onclick="deleteFromPreview()">删除</button>`;
+      }
+      modalActions.innerHTML = actionsHtml;
+      
       modal.style.display = 'block';
     }
     
+    function prevImage() {
+      if (previewIndex > 0) {
+        previewIndex--;
+        updatePreviewModal();
+      }
+    }
+    
+    function nextImage() {
+      if (previewIndex < previewImages.length - 1) {
+        previewIndex++;
+        updatePreviewModal();
+      }
+    }
+    
+    async function reviewFromPreview(newStatus) {
+      const current = previewImages[previewIndex];
+      if (!current) return;
+      
+      try {
+        await app.callFunction({
+          name: 'admin',
+          data: { action: 'review', imageId: current.id, status: newStatus, adminOpenid: currentUser.openid }
+        });
+        
+        previewImages.splice(previewIndex, 1);
+        
+        if (previewImages.length === 0) {
+          closeModal();
+          loadImages(0);
+          loadStats();
+        } else {
+          if (previewIndex >= previewImages.length) {
+            previewIndex = previewImages.length - 1;
+          }
+          updatePreviewModal();
+          loadImages(0);
+          loadStats();
+        }
+      } catch (err) {
+        alert('操作失败：' + err.message);
+      }
+    }
+    
+    async function deleteFromPreview() {
+      const current = previewImages[previewIndex];
+      if (!current) return;
+      
+      if (!confirm('确定要删除这张图片吗？')) return;
+      
+      try {
+        const result = await app.callFunction({
+          name: 'deleteImages',
+          data: {
+            action: 'batchDelete',
+            imageIds: [current.id]
+          }
+        });
+        
+        if (result.result && result.result.success) {
+          previewImages.splice(previewIndex, 1);
+          
+          if (previewImages.length === 0) {
+            closeModal();
+            loadImages(current.status);
+            loadStats();
+          } else {
+            if (previewIndex >= previewImages.length) {
+              previewIndex = previewImages.length - 1;
+            }
+            updatePreviewModal();
+            loadImages(current.status);
+            loadStats();
+          }
+        } else {
+          alert('删除失败：' + (result.result?.message || '未知错误'));
+        }
+      } catch (err) {
+        console.error('删除失败', err);
+        alert('删除失败：' + err.message);
+      }
+    }
+    
     function closeModal(event) {
+      if (event && event.target.tagName === 'IMG') return;
       const modal = document.getElementById('imageModal');
       modal.style.display = 'none';
     }
+    
+    document.addEventListener('keydown', (e) => {
+      const modal = document.getElementById('imageModal');
+      if (modal.style.display !== 'block') return;
+      
+      if (e.key === 'ArrowLeft') {
+        prevImage();
+      } else if (e.key === 'ArrowRight') {
+        nextImage();
+      } else if (e.key === 'Escape') {
+        closeModal();
+      }
+    });
     
     function switchTab(tab) {
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));

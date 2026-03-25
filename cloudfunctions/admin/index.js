@@ -31,19 +31,21 @@ function getUserRole(openid) {
 }
 
 exports.main = async (event, context) => {
-  const { action, imageId, status, openid: targetOpenid, role } = event;
+  const { action, imageId, status, openid: targetOpenid, role, adminOpenid } = event;
   const { OPENID } = cloud.getWXContext();
+
+  const requestOpenid = adminOpenid || OPENID;
 
   try {
     if (action === 'checkAdmin') {
-      return { isAdmin: isDeveloper(OPENID), openid: OPENID };
+      return { isAdmin: isDeveloper(requestOpenid), openid: requestOpenid };
     }
 
     if (action === 'checkUpload') {
-      return { canUpload: canUpload(OPENID), openid: OPENID, role: getUserRole(OPENID) };
+      return { canUpload: canUpload(requestOpenid), openid: requestOpenid, role: getUserRole(requestOpenid) };
     }
 
-    if (!isDeveloper(OPENID)) {
+    if (!isDeveloper(requestOpenid)) {
       return { success: false, msg: '无权限操作', noPermission: true };
     }
 

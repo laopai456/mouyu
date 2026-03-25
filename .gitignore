@@ -2,3 +2,7 @@ node_modules/
 .cloudfunction/
 *.log
 .DS_Store
+
+mouyu-uploader/config.json
+mouyu-uploader/cache/
+mouyu-uploader/logs/
