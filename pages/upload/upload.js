@@ -183,8 +183,14 @@ Page({
         }
 
         const uploadRes = await new Promise((resolve, reject) => {
+          const now = new Date();
+          const year = now.getFullYear();
+          const month = String(now.getMonth() + 1).padStart(2, '0');
+          const yearMonth = `${year}-${month}`;
+          const cloudPath = `memes/${yearMonth}/${Date.now()}_${Math.random().toString(36).substr(2, 9)}.jpg`;
+          
           wx.cloud.uploadFile({
-            cloudPath: `memes/${Date.now()}_${Math.random().toString(36).substr(2, 9)}.jpg`,
+            cloudPath,
             filePath: path,
             success: resolve,
             fail: reject

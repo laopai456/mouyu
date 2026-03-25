@@ -28,7 +28,11 @@ exports.main = async (event, context) => {
   try {
     const { fileID, md5 } = event;
     const { OPENID } = cloud.getWXContext();
-    const today = new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1;
+    const yearMonth = `${year}-${String(month).padStart(2, '0')}`;
+    const today = now.toISOString().split('T')[0];
 
     if (!canUpload(OPENID)) {
       return { success: false, msg: '无上传权限' };
@@ -64,6 +68,8 @@ exports.main = async (event, context) => {
         dislikeCount: 0,
         likeCount: 0,
         date: today,
+        yearMonth,
+        month,
         createTime: Date.now(),
       }
     });
