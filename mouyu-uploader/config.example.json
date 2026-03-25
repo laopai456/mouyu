@@ -1,0 +1,21 @@
+{
+  "env_id": "your-env-id",
+  "developer_openid": "your-openid",
+  "watch_folders": [
+    {
+      "path": "C:\\path\\to\\your\\images",
+      "enabled": true,
+      "description": "图片缓存文件夹"
+    }
+  ],
+  "file_types": ["jpg", "jpeg", "png", "gif", "webp", "bmp"],
+  "upload_delay": 2,
+  "max_retry": 3,
+  "auto_start": true,
+  "cos": {
+    "secret_id": "",
+    "secret_key": "",
+    "bucket": "your-bucket-name",
+    "region": "ap-shanghai"
+  }
+}
