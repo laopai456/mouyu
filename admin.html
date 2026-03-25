@@ -144,6 +144,12 @@
     </div>
     
     <div id="mainSection" class="hidden">
+      <div class="month-selector" style="margin-bottom: 20px; display: none;">
+        <button class="btn" onclick="changeMonth(-1)">← 上个月</button>
+        <span id="currentMonth" style="font-size: 18px; font-weight: bold; color: #333;"></span>
+        <button class="btn" onclick="changeMonth(1)">下个月 →</button>
+      </div>
+      
       <div class="stats">
         <div class="stat-card">
           <div class="num" id="pendingCount">0</div>
@@ -213,6 +219,7 @@
     let db = null;
     let currentUser = null;
     let selectedFiles = [];
+    let currentYearMonth = null; // 当前选择的月份
     
     // 将 cloud:// URL 转换为 https:// URL
     function transformCloudUrl(cloudUrl) {
@@ -324,6 +331,11 @@
       document.getElementById('username').textContent = '开发者';
       document.getElementById('logoutBtn').classList.remove('hidden');
       
+      // 初始化月份选择器为当前月份
+      const now = new Date();
+      currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      updateMonthSelector();
+      
       loadStats();
       loadImages(0);
       setupDropZone();
@@ -355,8 +367,17 @@
       listEl.innerHTML = '<div class="loading">加载中...</div>';
       
       try {
-        const res = await db.collection('images')
-          .where({ status })
+        let query = db.collection('images').where({ status });
+        
+        // 如果选择了月份，按月份筛选
+        if (currentYearMonth) {
+          query = db.collection('images').where({ 
+            status,
+            yearMonth: currentYearMonth 
+          });
+        }
+        
+        const res = await query
           .orderBy('createTime', 'desc')
           .limit(50)
           .get();
@@ -461,11 +482,23 @@
       if (!confirm('确定要删除这张图片吗？')) return;
       
       try {
-        await db.collection('images').doc(imageId).remove();
-        loadImages(status);
-        loadStats();
-        alert('删除成功');
+        const result = await app.callFunction({
+          name: 'deleteImages',
+          data: {
+            action: 'batchDelete',
+            imageIds: [imageId]
+          }
+        });
+        
+        if (result.result && result.result.success) {
+          loadImages(status);
+          loadStats();
+          alert('删除成功');
+        } else {
+          alert('删除失败：' + (result.result?.message || '未知错误'));
+        }
       } catch (err) {
+        console.error('删除失败', err);
         alert('删除失败：' + err.message);
       }
     }
@@ -480,22 +513,27 @@
       if (!confirm(`确定要删除选中的 ${checkboxes.length} 张图片吗？`)) return;
       
       const ids = Array.from(checkboxes).map(cb => cb.dataset.id);
-      let successCount = 0;
-      let failCount = 0;
       
-      for (const id of ids) {
-        try {
-          await db.collection('images').doc(id).remove();
-          successCount++;
-        } catch (err) {
-          console.error('删除失败', id, err);
-          failCount++;
+      try {
+        const result = await app.callFunction({
+          name: 'deleteImages',
+          data: {
+            action: 'batchDelete',
+            imageIds: ids
+          }
+        });
+        
+        if (result.result && result.result.success) {
+          alert(`删除完成\n成功: ${result.result.successCount}\n失败: ${result.result.failCount}`);
+          loadImages(status);
+          loadStats();
+        } else {
+          alert('删除失败：' + (result.result?.message || '未知错误'));
         }
+      } catch (err) {
+        console.error('批量删除失败', err);
+        alert('删除失败：' + err.message);
       }
-      
-      alert(`删除完成\n成功: ${successCount}\n失败: ${failCount}`);
-      loadImages(status);
-      loadStats();
     }
     
     function formatTime(timestamp) {
@@ -551,6 +589,45 @@
       } else if (tab === 'rejected') {
         document.getElementById('rejectedTab').classList.remove('hidden');
         loadImages(2);
+      }
+    }
+    
+    function changeMonth(delta) {
+      if (!currentYearMonth) {
+        const now = new Date();
+        currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      }
+      
+      const [year, month] = currentYearMonth.split('-').map(Number);
+      const date = new Date(year, month - 1 + delta, 1);
+      currentYearMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      
+      updateMonthSelector();
+      
+      // 重新加载当前标签页的图片
+      const activeTab = document.querySelector('.tab.active');
+      if (activeTab) {
+        const tabName = activeTab.textContent;
+        if (tabName === '待审核') loadImages(0);
+        else if (tabName === '已通过') loadImages(1);
+        else if (tabName === '已拒绝') loadImages(2);
+      }
+    }
+    
+    function updateMonthSelector() {
+      const monthSelector = document.querySelector('.month-selector');
+      const currentMonthEl = document.getElementById('currentMonth');
+      
+      if (currentYearMonth) {
+        monthSelector.style.display = 'flex';
+        monthSelector.style.justifyContent = 'center';
+        monthSelector.style.alignItems = 'center';
+        monthSelector.style.gap = '20px';
+        
+        const [year, month] = currentYearMonth.split('-');
+        currentMonthEl.textContent = `${year}年${parseInt(month)}月`;
+      } else {
+        monthSelector.style.display = 'none';
       }
     }
     
@@ -667,8 +744,12 @@
           previewEl.querySelector('.status')?.remove();
           previewEl.insertAdjacentHTML('beforeend', '<div class="status" style="background:#667eea">上传中...</div>');
           
+          const now = new Date();
+          const month = now.getMonth() + 1;
+          const yearMonth = `${now.getFullYear()}-${String(month).padStart(2, '0')}`;
+          const today = now.toISOString().split('T')[0];
           const ext = file.name.split('.').pop() || 'jpg';
-          const cloudPath = `memes/${Date.now()}_${Math.random().toString(36).substr(2, 9)}.${ext}`;
+          const cloudPath = `memes/${yearMonth}/${Date.now()}_${Math.random().toString(36).substr(2, 9)}.${ext}`;
           
           const uploadRes = await new Promise((resolve, reject) => {
             app.uploadFile({
@@ -696,7 +777,9 @@
             status: 0,
             dislikeCount: 0,
             likeCount: 0,
-            date: new Date().toISOString().split('T')[0],
+            date: today,
+            yearMonth,
+            month,
             createTime: Date.now()
           });
           
