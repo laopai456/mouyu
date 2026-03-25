@@ -1,0 +1,9 @@
+{
+  "name": "cosUploadHandler",
+  "version": "1.0.0",
+  "description": "处理 COS 上传事件，自动写入数据库",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}
