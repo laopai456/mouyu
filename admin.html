@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>木偶鱼 - 管理后台</title>
-  <script src="https://imgcache.qq.com/qcloud/cloudbase-js-sdk/1.7.1/cloudbase.full.js"></script>
+  <script src="https://static.cloudbase.net/cloudbase-js-sdk/latest/cloudbase.full.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
   <style>
@@ -74,9 +74,60 @@
     .stat-card .label { font-size: 14px; color: #666; margin-top: 5px; }
     
     .hidden { display: none !important; }
+    
+    /* 图片预览模态框 */
+    .modal {
+      display: none;
+      position: fixed;
+      z-index: 1000;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0,0,0,0.9);
+    }
+    .modal-content {
+      margin: auto;
+      display: block;
+      max-width: 90%;
+      max-height: 90%;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+    }
+    .modal-close {
+      position: absolute;
+      top: 20px;
+      right: 30px;
+      color: #fff;
+      font-size: 40px;
+      font-weight: bold;
+      cursor: pointer;
+      z-index: 1001;
+    }
+    .modal-close:hover {
+      color: #ccc;
+    }
+    .modal-info {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #fff;
+      font-size: 14px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
+  <!-- 图片预览模态框 -->
+  <div id="imageModal" class="modal" onclick="closeModal(event)">
+    <span class="modal-close" onclick="closeModal()">&times;</span>
+    <img class="modal-content" id="modalImage">
+    <div class="modal-info" id="modalInfo"></div>
+  </div>
+  
   <div class="container">
     <div class="header">
       <h1>木偶鱼 - 管理后台</h1>
@@ -163,11 +214,44 @@
     let currentUser = null;
     let selectedFiles = [];
     
+    // 将 cloud:// URL 转换为 https:// URL
+    function transformCloudUrl(cloudUrl) {
+      const regex = /^(cloud):\/\/([0-9\-A-Za-z]+)?\.([0-9\-A-Za-z]+)\/(.*)/;
+      const matched = cloudUrl.match(regex);
+      if (matched) {
+        const [_, protocol, envid, origin, path] = matched;
+        if (protocol === 'cloud') {
+          return `https://${origin}.tcb.qcloud.la/${path}`;
+        }
+      }
+      return null;
+    }
+    
     async function init() {
       try {
-        app = cloudbase.init({ env: ENV_ID });
+        // 1. 初始化 app
+        app = cloudbase.init({ 
+          env: ENV_ID,
+          region: 'ap-shanghai'
+        });
+        
+        // 2. 获取 auth 模块并进行匿名登录
+        const auth = app.auth();
+        const loginState = await auth.getLoginState();
+        
+        // 3. 如果未登录，进行匿名登录
+        if (!loginState) {
+          console.log('未登录，开始匿名登录...');
+          await auth.signInAnonymously();
+          console.log('匿名登录成功');
+        } else {
+          console.log('已登录，登录状态:', loginState);
+        }
+        
+        // 4. 获取数据库引用（登录成功后）
         db = app.database();
         
+        // 5. 检查是否有保存的 openid
         const savedOpenid = window.localStorage.getItem('admin_openid');
         if (savedOpenid && DEVELOPER_OPENIDS.includes(savedOpenid)) {
           currentUser = { openid: savedOpenid };
@@ -180,8 +264,17 @@
         document.getElementById('qrcode').innerHTML = `
           <p style="color:red">初始化失败: ${err.message}</p>
           <p style="color:#666;margin-top:15px;font-size:14px">
-            请确保已开启"未登录用户访问云资源权限"
+            请确保已在云开发控制台开启以下权限：<br>
+            1. 未登录用户访问云资源权限<br>
+            2. 允许匿名登入<br>
+            <br>
+            <a href="https://console.cloud.tencent.com/tcb/env/setting?envId=${ENV_ID}" 
+               target="_blank" style="color:#667eea">点击前往云开发控制台设置</a>
           </p>
+          <button onclick="location.reload()" 
+                  style="margin-top:15px;padding:10px 20px;background:#667eea;color:#fff;border:none;border-radius:6px;cursor:pointer">
+            重试
+          </button>
         `;
       }
     }
@@ -273,6 +366,48 @@
           return;
         }
         
+        const fileIDs = res.data.map(item => item.url).filter(url => url);
+        let urlMap = {};
+        
+        if (fileIDs.length > 0) {
+          try {
+            console.log('获取临时 URL，文件数量:', fileIDs.length);
+            
+            // 使用云函数获取临时 URL
+            const tempUrlResult = await app.callFunction({
+              name: 'getTempUrls',
+              data: { fileIDs }
+            });
+            
+            console.log('云函数返回:', tempUrlResult);
+            
+            if (tempUrlResult.result && tempUrlResult.result.success) {
+              urlMap = tempUrlResult.result.urlMap;
+              console.log('URL 映射表:', urlMap);
+            } else {
+              console.error('云函数返回失败:', tempUrlResult.result);
+              // 如果云函数失败，尝试使用正则转换
+              fileIDs.forEach(fileID => {
+                const httpsUrl = transformCloudUrl(fileID);
+                if (httpsUrl) {
+                  urlMap[fileID] = httpsUrl;
+                }
+              });
+            }
+          } catch (err) {
+            console.error('获取临时链接失败', err);
+            // 如果获取失败，尝试使用正则转换所有 URL
+            fileIDs.forEach(fileID => {
+              const httpsUrl = transformCloudUrl(fileID);
+              if (httpsUrl) {
+                urlMap[fileID] = httpsUrl;
+              }
+            });
+          }
+        }
+        
+        console.log('最终 URL 映射表:', urlMap);
+        
         listEl.innerHTML = `
           <div class="batch-actions">
             <label><input type="checkbox" onchange="toggleSelectAll(this, ${status})"> 全选</label>
@@ -285,7 +420,7 @@
                 <div class="checkbox">
                   <input type="checkbox" class="image-checkbox" data-id="${item._id}" data-status="${status}" onchange="updateSelectedCount(${status})">
                 </div>
-                <img src="${item.url}" onclick="previewImage('${item.url}')" style="cursor:pointer">
+                <img src="${urlMap[item.url] || item.url}" onclick="previewImage('${urlMap[item.url] || item.url}')" style="cursor:pointer">
                 <div class="info">
                   <div class="time">${formatTime(item.createTime)}</div>
                   <div style="margin-top:5px;color:#666;font-size:12px">🌸 ${item.likeCount || 0} | 💩 ${item.dislikeCount || 0}</div>
@@ -382,7 +517,18 @@
     }
     
     function previewImage(url) {
-      window.open(url, '_blank');
+      const modal = document.getElementById('imageModal');
+      const modalImg = document.getElementById('modalImage');
+      const modalInfo = document.getElementById('modalInfo');
+      
+      modalImg.src = url;
+      modalInfo.textContent = '点击任意位置关闭';
+      modal.style.display = 'block';
+    }
+    
+    function closeModal(event) {
+      const modal = document.getElementById('imageModal');
+      modal.style.display = 'none';
     }
     
     function switchTab(tab) {
