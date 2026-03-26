@@ -3,6 +3,14 @@ node_modules/
 *.log
 .DS_Store
 
-mouyu-uploader/config.json
-mouyu-uploader/cache/
-mouyu-uploader/logs/
+tools/uploader/config.json
+tools/uploader/cache/
+tools/uploader/logs/
+
+tools/telegram-parser/temp_tdata/
+tools/telegram-parser/__pycache__/
+tools/telegram-parser/**/__pycache__/
+
+TelegramStorageParser/
+
+.vscode/

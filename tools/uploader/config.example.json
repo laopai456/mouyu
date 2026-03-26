@@ -12,6 +12,7 @@
   "upload_delay": 2,
   "max_retry": 3,
   "auto_start": true,
+  "delete_after_upload": false,
   "cos": {
     "secret_id": "",
     "secret_key": "",

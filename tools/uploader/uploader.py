@@ -98,6 +98,21 @@ class ImageUploader(FileSystemEventHandler):
     
     def upload_image(self, file_path):
         try:
+            if not os.path.exists(file_path):
+                self.logger.warning(f"文件不存在，跳过: {file_path}")
+                return
+            
+            if not os.path.isfile(file_path):
+                self.logger.warning(f"不是有效文件，跳过: {file_path}")
+                return
+            
+            try:
+                with open(file_path, 'rb') as f:
+                    f.read(1)
+            except IOError as e:
+                self.logger.warning(f"文件被占用或无法访问，跳过: {file_path} - {e}")
+                return
+            
             md5 = self.calculate_md5(file_path)
             
             if md5 in self.md5_cache:
@@ -133,6 +148,14 @@ class ImageUploader(FileSystemEventHandler):
                 }
                 self.save_md5_cache()
                 self.logger.info(f"数据库写入成功，图片已添加到待审核列表")
+                
+                delete_after_upload = self.config.get('delete_after_upload', False)
+                if delete_after_upload:
+                    try:
+                        os.remove(file_path)
+                        self.logger.info(f"已清理本地文件: {file_path}")
+                    except Exception as e:
+                        self.logger.error(f"清理本地文件失败: {e}")
             else:
                 self.logger.error(f"数据库写入失败: {db_result.get('message', '未知错误')}")
                 

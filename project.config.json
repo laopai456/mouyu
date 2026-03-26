@@ -54,7 +54,44 @@
   },
   "simulatorPluginLibVersion": {},
   "packOptions": {
-    "ignore": [],
+    "ignore": [
+      {
+        "type": "folder",
+        "value": "tools"
+      },
+      {
+        "type": "folder",
+        "value": "TelegramStorageParser"
+      },
+      {
+        "type": "folder",
+        "value": "docs"
+      },
+      {
+        "type": "folder",
+        "value": "admin"
+      },
+      {
+        "type": "suffix",
+        "value": ".py"
+      },
+      {
+        "type": "suffix",
+        "value": ".bat"
+      },
+      {
+        "type": "suffix",
+        "value": ".md"
+      },
+      {
+        "type": "suffix",
+        "value": ".txt"
+      },
+      {
+        "type": "suffix",
+        "value": ".example"
+      }
+    ],
     "include": []
   },
   "cloudfunctionTemplateRoot": "cloudfunctionTemplate/"
