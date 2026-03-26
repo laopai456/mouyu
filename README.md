@@ -1,4 +1,6 @@
-# 木偶鱼小程序 - 项目文档
+# 木偶鱼PAF - 沙雕趣图搬运工
+
+> 微信小程序 | 沙雕趣图随机展示
 
 > 最后更新：2026-03-26
 
@@ -9,9 +11,9 @@
 | 项目名称 | 木偶鱼PAF |
 |----------|------------|
 | 项目类型 | 微信小程序 |
-| 核心功能 | 随机展示梗图，用户上传，踩/送花功能 |
+| 核心功能 | 随机展示梗图，用户上传，踩/送花/哈哈功能 |
 | 设计原则 | 极简、傻瓜化，开源 |
-| 当前版本 | v1.0.4 |
+| 当前版本 | v1.0.5 |
 
 ---
 
@@ -32,7 +34,14 @@ mouyu/
 │
 ├── 🛠️ 工具目录                         # 开发工具，不上传
 │   ├── uploader/                      # 图片上传工具
+│   │   ├── config.example.json        # 配置示例
+│   │   ├── uploader.py                # 主程序
+│   │   ├── requirements.txt          # 依赖包
+│   │   └── 启动.bat                   # Windows 启动脚本
 │   └── telegram-decrypter/            # Telegram 缓存解密工具
+│       ├── main.py                    # 主程序
+│       ├── setup.py                   # 安装脚本
+│       └── README.md                  # 工具说明
 │
 ├── 📄 文档目录                          # 文档，不上传
 │   └── README.md                      # 本文档
@@ -54,15 +63,24 @@ mouyu/
 | 功能 | 描述 |
 |------|------|
 | 随机展示 | 首页下拉刷新换图，已看图片不重复 |
+| 哈哈功能 | 😂 按钮，点击后屏幕飞过各种"哈哈"文字，有权重提升效果 |
 | 送花功能 | 🌸 按钮，每人每天1次 |
 | 踩功能 | 💩 按钮，每人每天3次，踩后自动换图 |
 | 上传入口 | 点击右上角+上传图片，每天最多9张 |
 | 审核机制 | 图片上传后需管理员审核才展示 |
 
-### 3.2 交互规则
+### 3.2 哈哈权重系统
+
+- 用户每点击一次哈哈按钮，有效次数(≤15次)会记录到图片
+- laughCount 越高的图片，被优先展示的概率越大
+- 超过15次点击视为无效，不计入权重
+- 算法：每个图片权重 = `laughCount + 1`（保证新图片也有展示机会）
+
+### 3.3 交互规则
 
 | 功能 | 规则 |
 |------|------|
+| 哈哈 | 有效次数≤15次，记录权重 |
 | 送花 | 每人每天1次，全局限制 |
 | 踩 | 每人每天3次，不能重复踩同一张 |
 | 上传 | 每人每天9张，需审核后展示 |
@@ -111,6 +129,7 @@ mouyu/
 | status | number | 0待审核/1已通过/2已拒绝 |
 | dislikeCount | number | 被踩次数 |
 | likeCount | number | 被送花次数 |
+| laughCount | number | 被哈哈次数（权重） |
 | date | string | 上传日期 YYYY-MM-DD |
 | yearMonth | string | 年月 YYYY-MM |
 | month | number | 月份 |
@@ -128,9 +147,10 @@ mouyu/
 
 | 云函数 | 功能 |
 |--------|------|
-| getRandomImage | 获取随机图片 |
+| getRandomImage | 获取随机图片（加权随机算法） |
 | dislikeImage | 踩图片 |
 | likeImage | 送花 |
+| laughImage | 记录哈哈次数 |
 | addImage | 添加图片 |
 | admin | 管理员操作（审核、权限验证） |
 | getTempUrls | 获取临时URL |
@@ -201,7 +221,7 @@ tools/uploader/
   "developer_openid": "oWatD3bwu0aVaFTPvrrerAU_C2zY",
   "watch_folders": [
     {
-      "path": "C:\\Users\\w\\Documents\\Tencent Files\\xxx\\Pic\\2026-03\\Ori",
+      "path": "C:\\Users\\xxx\\Documents\\Tencent Files\\xxx\\Pic\\2026-03\\Ori",
       "enabled": true,
       "description": "QQ 图片缓存"
     }
@@ -230,9 +250,59 @@ python uploader.py
 
 ---
 
-## 九、Web 管理后台
+## 九、 Telegram Decrypter 工具
+
+> Telegram Desktop 缓存数据解密工具
 
 ### 9.1 功能
+
+- 解密 Telegram Desktop 的本地数据文件 (tdata)
+- 查看用户 ID、DC ID 和验证密钥
+- 读取应用程序设置
+- 支持加密和非加密数据
+- 支持 JSON 格式输出
+
+### 9.2 依赖
+
+- Python 3.8+
+- tgcrypto 库
+
+### 9.3 安装和使用
+
+```bash
+# 安装
+pip install .
+
+# 运行
+python main.py <tdata_path> [--passcode <password>] [--show_settings] [--json]
+```
+
+**参数说明：**
+- `<tdata_path>`: Telegram `tdata/` 目录路径
+- `--passcode`, `-p`: (可选) 如果 tdata/ 加密，需要输入密码
+- `--show_settings`: 显示解码后的设置
+- `--json`, `-j`: JSON 格式输出
+
+**示例：**
+```sh
+# 标准输出账户信息
+python main.py /path/to/tdata/
+
+# JSON格式输出
+python main.py /path/to/tdata/ --json
+
+# 显示设置
+python main.py /path/to/tdata/ --show_settings
+
+# 读取加密目录
+python main.py /path/to/tdata/ --passcode 'password'
+```
+
+---
+
+## 十、Web 管理后台
+
+### 10.1 功能
 
 - 批量上传图片（无数量限制）
 - 图片审核（通过/拒绝）
@@ -241,7 +311,7 @@ python uploader.py
 - 图片预览（左右切换、键盘快捷键）
 - 预览界面直接操作
 
-### 9.2 使用方法
+### 10.2 使用方法
 
 ```bash
 # 启动本地服务器
@@ -251,7 +321,7 @@ python -m http.server 9000
 http://localhost:9000/admin.html
 ```
 
-### 9.3 快捷键
+### 10.3 快捷键
 
 | 快捷键 | 功能 |
 |--------|------|
@@ -261,16 +331,16 @@ http://localhost:9000/admin.html
 
 ---
 
-## 十、云开发配置
+## 十一、云开发配置
 
-### 10.1 权限设置
+### 11.1 权限设置
 
 - 开启「未登录用户访问云资源权限」
 - 开启「允许匿名登入」
 - 数据库权限：images 集合设置为「所有用户可读，创建者可写」
 - 存储权限：设置为「所有用户可读，创建者可写」
 
-### 10.2 云函数权限
+### 11.2 云函数权限
 
 ```json
 // getTempUrls
@@ -285,7 +355,7 @@ http://localhost:9000/admin.html
 
 ---
 
-## 十一、管理员配置
+## 十二、管理员配置
 
 在 `cloudfunctions/admin/index.js` 中配置：
 
@@ -304,7 +374,63 @@ wx.cloud.callFunction({
 
 ---
 
-## 十二、版本历史
+## 十三、版本历史
+
+### v1.0.6 (2026-03-27)
+
+**新增功能：**
+- 隐藏模式特效系统
+  - 送花解锁隐藏模式（全天候生效，次日重置）
+  - 飞字气泡三种动态效果：彩虹渐变、霓虹发光、故障艺术
+  - 舞台射灯效果（4个彩色光柱左右摇摆）
+  - 舞台暗色背景衬托
+- 送花/踩按钮静默处理（无Toast无加载圈）
+- 踩次数显示优化（3次/天，显示剩余次数）
+
+**新增云函数：**
+- `laughImage` - 记录哈哈点击次数到数据库
+
+**修改云函数：**
+- `dislikeImage` - 踩降低权重（laughCount -0.5）
+- `likeImage` - 送花次数改为3次/天
+
+**交互优化：**
+- 哈哈按钮样式优化（橙色渐变+圆角）
+- 哈哈飞字位置优化（长文本不超过5字避免截断）
+- 踩飞字emoji效果（💩噗呕🤮呸随机飞出）
+- 飞字层级优化（效果在舞台灯光上层）
+
+**文件变更：**
+- 新增 `cloudfunctions/laughImage/` 云函数
+- 修改 `pages/index/index.js`（笑哭效果、隐藏模式、踩次数）
+- 修改 `pages/index/index.wxml`（舞台灯光结构）
+- 修改 `pages/index/index.wxss`（动态效果样式）
+- 修改 `cloudfunctions/likeImage/index.js`（送花次数3次）
+- 修改 `cloudfunctions/dislikeImage/index.js`（权重调整）
+
+---
+
+### v1.0.5 (2026-03-26)
+
+**新增功能：**
+- 哈哈按钮权重系统
+  - 点击哈哈按钮记录到图片 laughCount 字段
+  - 超过15次点击视为无效
+  - 加权随机算法优先展示高 laughCount 图片
+- 哈哈飞字效果增强
+  - 多彩气泡背景（8种颜色）
+  - 弹跳缩放动画
+  - 50+文案库（含10年前经典梗）
+  - 均衡的左/中/右位置分布
+
+**修复问题：**
+- 修复图片重复出现的竞态条件
+- 云函数随机数范围问题
+
+**文件变更：**
+- 新增 `cloudfunctions/laughImage/` 云函数
+- 修改 `pages/index/` 首页（哈哈按钮+飞字效果）
+- 修改 `cloudfunctions/getRandomImage/` 云函数（加权随机）
 
 ### v1.0.4 (2026-03-25)
 
@@ -324,13 +450,6 @@ wx.cloud.callFunction({
 - 修复Web管理后台审核功能无权限问题
 - 云函数支持adminOpenid参数传递
 
-**文件变更：**
-- 新增 `tools/uploader/` 自动上传工具目录
-- 修改 `cloudfunctions/admin/index.js` 支持Web端调用
-- 修改 `admin.html` 预览功能增强
-
----
-
 ### v1.0.3 (2026-03-25)
 
 **主要更新：**
@@ -344,8 +463,6 @@ wx.cloud.callFunction({
 - 增加重复图片检测功能（MD5）
 - 按月份自动分类存储图片
 - 自动清理 3 天前的图片
-
----
 
 ### v1.0.2
 - 基础功能实现
@@ -361,40 +478,62 @@ wx.cloud.callFunction({
 
 ---
 
-## 十三、部署步骤
+## 十四、部署步骤
 
-1. 部署云函数：
+1. **部署云函数：**
    - admin
    - getTempUrls
    - deleteImages
    - autoCleanup
    - autoUpload
+   - laughImage（新增）
 
-2. 配置云函数权限
+2. **配置云函数权限**
 
-3. 配置定时触发器（autoCleanup）
+3. **配置定时触发器（autoCleanup）**
 
-4. 配置自动上传工具（config.json）
+4. **配置自动上传工具（config.json）**
 
-5. 启动本地服务器访问 Web 管理工具
+5. **启动本地服务器访问 Web 管理工具**
 
 ---
 
-## 十四、注意事项
+## 十五、上传前必读
 
-### 14.1 上传前必读
+### 15.1 代码包状态
 
-- 使用微信开发者工具的"上传"功能前
-- 先点击"详情" → "本地设置"
-- 查看"代码依赖分析"确认包内容
-- 使用"预览"功能测试
+- **大小**：294KB
+- **文件数**：47 个
+- **状态**：✅ 正常
 
-### 14.2 敏感信息
+### 15.2 已排除的文件
 
-- `project.private.config.json` 包含敏感配置，不应上传
-- `tools/uploader/config.json` 包含上传凭证，不应上传
+- ❌ `tools/` - 工具目录
+- ❌ `docs/` - 文档目录
+- ❌ `admin/` - 管理工具
+- ❌ `*.py` - Python 文件
+- ❌ `*.md` - Markdown 文件
 
-### 14.3 备份
+### 15.3 敏感信息
 
-- 定期备份 `config.json` 和敏感文件
-- 使用 `config.example.json` 作为配置模板
+- ❌ 不要上传 `project.private.config.json`
+- ❌ 不要上传 `tools/uploader/config.json`
+- ❌ 不要上传任何包含密钥的文件
+
+### 15.4 检查清单
+
+- [ ] 查看"代码依赖分析"确认包内容
+- [ ] 使用"预览"功能测试
+- [ ] 确认没有包含敏感文件
+
+---
+
+## 十六、安全声明
+
+本项目中的 Telegram Decrypter 工具仅供教育和研究使用。请始终尊重隐私和法律准则。
+
+---
+
+## 十七、许可证
+
+本项目基于 MIT 许可证开源。

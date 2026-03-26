@@ -32,7 +32,10 @@ exports.main = async (event, context) => {
     });
 
     await db.collection('images').doc(imageId).update({
-      data: { dislikeCount: db.command.inc(1) }
+      data: {
+        dislikeCount: db.command.inc(1),
+        laughCount: db.command.inc(-0.5)
+      }
     });
 
     return { success: true };

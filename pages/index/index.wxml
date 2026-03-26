@@ -32,7 +32,10 @@
         <text class="like-icon">🌸</text>
         <text class="action-count">1</text>
       </view>
-      <text class="slogan" bindtap="onTitleTap">热爱可抵漫长岁月</text>
+      <view class="slogan-wrapper">
+        <text class="slogan" bindtap="onTitleTap">热爱可抵漫长岁月</text>
+        <text class="slogan-sub">沙雕趣图搬运工</text>
+      </view>
     </view>
     <view class="upload-btn" bindtap="goUpload" wx:if="{{canUpload}}">
       <text>+</text>
@@ -42,5 +45,25 @@
   <view class="dislike-btn" bindtap="onDislike" wx:if="{{!noMoreImages}}">
     <text class="dislike-icon">💩</text>
     <text class="action-count">3</text>
+  </view>
+
+  <view class="laugh-btn" bindtap="onLaugh">
+    <text class="laugh-icon">哈</text>
+  </view>
+
+  <view class="laugh-container">
+    <view 
+      wx:for="{{flyingTexts}}"
+      wx:key="id"
+      class="flying-text {{item.effect}}"
+      style="{{item.style}}"
+    >{{item.text}}</view>
+  </view>
+
+  <view class="stage-light" wx:if="{{stageLight}}">
+    <view class="spotlight"></view>
+    <view class="spotlight"></view>
+    <view class="spotlight"></view>
+    <view class="spotlight"></view>
   </view>
 </view>

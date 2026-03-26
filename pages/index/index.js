@@ -16,12 +16,21 @@ Page({
     noMoreImages: false,
     hasLikedToday: false,
     canUpload: false,
+    flyingTexts: [],
+    laughCount: 0,
+    laughMode: false,
+    stageLight: false,
   },
 
   imageQueue: [],
   preloading: false,
   seenIds: [],
   adminTapTimes: [],
+  flyingTextId: 0,
+  laughCounts: {},
+  laughTimer: null,
+  userDislikeToday: 0,
+  dislikedImages: new Set(),
 
   onLoad() {
     this.checkLikeStatus();
@@ -47,7 +56,11 @@ Page({
   checkLikeStatus() {
     const today = new Date().toISOString().split('T')[0];
     const lastLikeDate = wx.getStorageSync('lastLikeDate');
-    this.setData({ hasLikedToday: lastLikeDate === today });
+    const laughModeUnlocked = wx.getStorageSync('laughModeUnlocked');
+    this.setData({
+      hasLikedToday: lastLikeDate === today,
+      laughMode: laughModeUnlocked === today
+    });
   },
 
   async initImages() {
@@ -113,15 +126,25 @@ Page({
 
     const image = this.imageQueue.shift();
     this.seenIds.push(image._id);
-    
+
     const displayUrl = image.tempUrl || image.url;
-    
+
+    if (!this.laughCounts[image._id]) {
+      this.laughCounts[image._id] = 0;
+    }
+
+    const alreadyDisliked = this.dislikedImages.has(image._id);
+    const remainingDislikes = alreadyDisliked
+      ? Math.max(0, 3 - this.userDislikeToday)
+      : 3;
+
     this.setData({
       imageUrl: displayUrl,
       imageId: image._id,
-      dislikeCount: image.dislikeCount || 0,
+      dislikeCount: remainingDislikes,
       likeCount: image.likeCount || 0,
       noMoreImages: false,
+      laughCount: this.laughCounts[image._id],
     });
 
     this.preloadImages();
@@ -139,7 +162,11 @@ Page({
       if (needCount > 0) {
         const images = await this.fetchImages(needCount);
         if (images && images.length > 0) {
-          this.imageQueue.push(...images);
+          const existingIds = new Set([...this.seenIds, ...this.imageQueue.map(img => img._id)]);
+          const newImages = images.filter(img => !existingIds.has(img._id));
+          if (newImages.length > 0) {
+            this.imageQueue.push(...newImages);
+          }
         }
       }
     } catch (err) {
@@ -178,75 +205,96 @@ Page({
 
   onLike() {
     if (!this.data.imageId) {
-      wx.showToast({ title: '暂无图片', icon: 'none' });
       return;
     }
 
     if (this.data.hasLikedToday) {
-      wx.showToast({ title: '今天已经送过花了', icon: 'none' });
       return;
     }
 
-    wx.showLoading({ title: '提交中...' });
     wx.cloud.callFunction({
       name: 'likeImage',
       data: {
         imageId: this.data.imageId,
       },
       success: (res) => {
-        wx.hideLoading();
         if (res.result && res.result.success) {
           const today = new Date().toISOString().split('T')[0];
           wx.setStorageSync('lastLikeDate', today);
-          this.setData({ 
+          wx.setStorageSync('laughModeUnlocked', today);
+          this.setData({
             likeCount: this.data.likeCount + 1,
-            hasLikedToday: true 
+            hasLikedToday: true,
+            laughMode: true
           });
-          wx.showToast({ title: '送花成功 🌸', icon: 'none' });
-        } else {
-          wx.showToast({ title: res.result.msg || '送花失败', icon: 'none' });
         }
-      },
-      fail: (err) => {
-        wx.hideLoading();
-        console.error(err);
-        wx.showToast({ title: '送花失败', icon: 'none' });
       }
     });
   },
 
   onDislike() {
     if (!this.data.imageId) {
-      wx.showToast({ title: '暂无图片', icon: 'none' });
       return;
     }
 
-    wx.showLoading({ title: '提交中...' });
+    if (this.userDislikeToday >= 3) {
+      return;
+    }
+
+    if (this.dislikedImages.has(this.data.imageId)) {
+      return;
+    }
+
+    this.showFlyingPoop();
+    this.userDislikeToday++;
+    this.dislikedImages.add(this.data.imageId);
+
+    this.setData({ dislikeCount: 3 - this.userDislikeToday });
+
     wx.cloud.callFunction({
       name: 'dislikeImage',
       data: {
         imageId: this.data.imageId,
       },
       success: (res) => {
-        wx.hideLoading();
         if (res.result && res.result.success) {
-          wx.showToast({ title: '踩成功 💩', icon: 'none' });
-          this.setData({ dislikeCount: this.data.dislikeCount + 1 });
           setTimeout(() => {
             if (this.imageQueue.length > 0) {
               this.showNextImage();
             }
           }, 800);
-        } else {
-          wx.showToast({ title: res.result.msg || '踩失败', icon: 'none' });
         }
-      },
-      fail: (err) => {
-        wx.hideLoading();
-        console.error(err);
-        wx.showToast({ title: '踩失败', icon: 'none' });
       }
     });
+  },
+
+  showFlyingPoop() {
+    const screenWidth = wx.getSystemInfoSync().windowWidth;
+    const screenHeight = wx.getSystemInfoSync().windowHeight;
+    const emojis = ['💩', '噗', '呕', '🤮', '呸'];
+    const poop = emojis[Math.floor(Math.random() * emojis.length)];
+    const id = ++this.flyingTextId;
+    const startX = screenWidth * 0.3 + Math.random() * (screenWidth * 0.4);
+    const startY = screenHeight * 0.5 + Math.random() * (screenHeight * 0.2);
+    const fontSize = 80 + Math.floor(Math.random() * 40);
+    const rotation = -30 + Math.random() * 60;
+    const duration = 1200 + Math.random() * 600;
+
+    const flyingText = {
+      id,
+      text: poop,
+      style: `left: ${startX}px; top: ${startY}px; font-size: ${fontSize}rpx; --rotation: ${rotation}deg; animation-duration: ${duration}ms;`,
+      effect: 'poop'
+    };
+
+    const flyingTexts = [...this.data.flyingTexts, flyingText];
+    this.setData({ flyingTexts });
+
+    setTimeout(() => {
+      this.setData({
+        flyingTexts: this.data.flyingTexts.filter(t => t.id !== id)
+      });
+    }, duration + 100);
   },
 
   onTitleTap() {
@@ -259,6 +307,118 @@ Page({
       this.adminTapTimes = [];
       wx.navigateTo({ url: '/pages/admin/admin' });
     }
+  },
+
+  onLaugh() {
+    const screenWidth = wx.getSystemInfoSync().windowWidth;
+    const screenHeight = wx.getSystemInfoSync().windowHeight;
+
+    const texts = [
+      '哈哈', '哈哈哈', '哈哈哈哈', '笑死', '笑死我了', '笑出猪叫',
+      '233', '哈哈哈哈哈哈', '笑到肚子疼', '噗', '呵呵',
+      '绷不住', '蚌埠住', '笑不活了', '太魔性了', '哈哈嗝',
+      '笑到头掉', '救命', '救命😂', '救命，笑死', '我也会笑',
+      '这也太准了', '确实', '绝了', '太准了', '上号上号',
+      'dddd', '懂的都懂', '家人们谁懂', '破防了', 'yyds',
+      '我和我的小伙伴们都惊呆了', '整个人都不好了', '何弃疗', '喜大普奔',
+      '十动然拒', '说闘覺餘', '也是蠻拼的', '瀑布汗', '腫麼辦',
+      '有木有', '傷不起', '給跪了', '香菇藍瘦', '藍瘦香菇',
+      '崩潰', '醉了', '醉了醉了', '吃藥了', '你腫麼這麼傻',
+      '笑到打嗝', '笑到抽筋', '笑出眼泪', '笑死咯🤣', '俺也一样',
+      '禁止套娃', '芜湖起飞', '绝绝子', '集美', '爷青回', '泪目',
+      '燃起来了', '笑哭😭', '捂脸😂', '笑到起飞🤪', '笑死啦🤣',
+      '我笑了我', '真的笑死', '救命啊😂', '绷不住啦🤣', '笑出腹肌'
+    ];
+    const text = texts[Math.floor(Math.random() * texts.length)];
+
+    const id = ++this.flyingTextId;
+    const rand = Math.random();
+    let startX;
+    const textLen = text.replace(/[^\x00-\xff]/g, 'aa').length / 2;
+
+    if (textLen > 5) {
+      startX = Math.random() * (screenWidth * 0.5);
+    } else if (textLen > 2) {
+      if (rand < 0.6) {
+        startX = Math.random() * (screenWidth * 0.55);
+      } else {
+        startX = screenWidth * 0.4 + Math.random() * (screenWidth * 0.25);
+      }
+    } else {
+      if (rand < 0.5) {
+        startX = Math.random() * (screenWidth * 0.45);
+      } else if (rand < 0.75) {
+        startX = Math.random() * (screenWidth * 0.6);
+      } else {
+        startX = screenWidth * 0.75 + Math.random() * (screenWidth * 0.2);
+      }
+    }
+    const startY = screenHeight * 0.45 + Math.random() * (screenHeight * 0.35);
+
+    const colors = [
+      { bg: '#ff6b6b', shadow: 'rgba(255,107,107,0.6)' },
+      { bg: '#ffd93d', shadow: 'rgba(255,217,61,0.6)' },
+      { bg: '#6bcb77', shadow: 'rgba(107,203,119,0.6)' },
+      { bg: '#4d96ff', shadow: 'rgba(77,150,255,0.6)' },
+      { bg: '#9b59b6', shadow: 'rgba(155,89,182,0.6)' },
+      { bg: '#ff9ff3', shadow: 'rgba(255,159,243,0.6)' },
+      { bg: '#54a0ff', shadow: 'rgba(84,160,255,0.6)' },
+      { bg: '#5f27cd', shadow: 'rgba(95,39,205,0.6)' },
+    ];
+    const colorScheme = colors[Math.floor(Math.random() * colors.length)];
+
+    const fontSize = 36 + Math.floor(Math.random() * 24);
+    const duration = 1800 + Math.random() * 800;
+
+    const flyingText = {
+      id,
+      text,
+      style: `left: ${startX}px; top: ${startY}px; font-size: ${fontSize}rpx; animation-duration: ${duration}ms;`
+    };
+
+    if (this.data.laughMode) {
+      const effects = ['gradient', 'neon', 'glitch'];
+      const effect = effects[Math.floor(Math.random() * effects.length)];
+      flyingText.effect = effect;
+
+      if (!this.data.stageLight) {
+        this.setData({ stageLight: true });
+      }
+    } else {
+      flyingText.style += ` color: #fff; background: ${colorScheme.bg}; box-shadow: 0 4rpx 20rpx ${colorScheme.shadow};`;
+    }
+
+    const flyingTexts = [...this.data.flyingTexts, flyingText];
+    this.setData({ flyingTexts, stageLight: true });
+
+    if (this.laughTimer) {
+      clearTimeout(this.laughTimer);
+    }
+    this.laughTimer = setTimeout(() => {
+      this.setData({ stageLight: false });
+    }, 3000);
+
+    if (this.data.laughCount < 15 && this.data.imageId) {
+      this.laughCounts[this.data.imageId] = (this.laughCounts[this.data.imageId] || 0) + 1;
+      this.setData({ laughCount: this.laughCounts[this.data.imageId] });
+
+      wx.cloud.callFunction({
+        name: 'laughImage',
+        data: {
+          imageId: this.data.imageId,
+          laughCount: this.laughCounts[this.data.imageId]
+        },
+        fail: (err) => {
+          console.error('记录哈哈失败', err);
+        }
+      });
+    }
+
+    setTimeout(() => {
+      this.setData({
+        flyingTexts: this.data.flyingTexts.filter(t => t.id !== id)
+      });
+    }, duration + 100);
   },
 
   goUpload() {

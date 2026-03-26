@@ -7,6 +7,7 @@ import logging
 import hmac
 import base64
 import hashlib as sha256
+import threading
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlencode
@@ -23,6 +24,8 @@ class ImageUploader(FileSystemEventHandler):
         self.developer_openid = config['developer_openid']
         self.md5_cache_file = Path(__file__).parent / 'cache' / 'md5_cache.json'
         self.md5_cache = self.load_md5_cache()
+        self.processing_files = set()
+        self.processing_lock = threading.Lock()
         self.setup_logging()
         self.setup_cos_client()
         
@@ -81,9 +84,20 @@ class ImageUploader(FileSystemEventHandler):
         
         file_path = event.src_path
         if self.is_image(file_path):
+            with self.processing_lock:
+                if file_path in self.processing_files:
+                    self.logger.info(f"文件正在处理中，跳过: {file_path}")
+                    return
+                self.processing_files.add(file_path)
+            
             self.logger.info(f"检测到新图片: {file_path}")
-            time.sleep(self.config['upload_delay'])
-            self.upload_image(file_path)
+            threading.Thread(target=self._upload_with_delay, args=(file_path,), daemon=True).start()
+    
+    def _upload_with_delay(self, file_path):
+        time.sleep(self.config['upload_delay'])
+        self.upload_image(file_path)
+        with self.processing_lock:
+            self.processing_files.discard(file_path)
     
     def is_image(self, file_path):
         ext = Path(file_path).suffix.lower().lstrip('.')
@@ -97,21 +111,49 @@ class ImageUploader(FileSystemEventHandler):
         return hash_md5.hexdigest()
     
     def upload_image(self, file_path):
-        try:
-            if not os.path.exists(file_path):
-                self.logger.warning(f"文件不存在，跳过: {file_path}")
-                return
-            
-            if not os.path.isfile(file_path):
-                self.logger.warning(f"不是有效文件，跳过: {file_path}")
-                return
-            
+        max_retries = self.config.get('max_retry', 3)
+        retry_delay = 2
+        
+        for attempt in range(max_retries):
             try:
-                with open(file_path, 'rb') as f:
-                    f.read(1)
-            except IOError as e:
-                self.logger.warning(f"文件被占用或无法访问，跳过: {file_path} - {e}")
-                return
+                if not os.path.exists(file_path):
+                    if attempt < max_retries - 1:
+                        self.logger.warning(f"文件不存在，{retry_delay}秒后重试 ({attempt + 1}/{max_retries}): {file_path}")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        self.logger.warning(f"文件不存在，跳过: {file_path}")
+                        return
+                
+                if not os.path.isfile(file_path):
+                    if attempt < max_retries - 1:
+                        self.logger.warning(f"不是有效文件，{retry_delay}秒后重试 ({attempt + 1}/{max_retries}): {file_path}")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        self.logger.warning(f"不是有效文件，跳过: {file_path}")
+                        return
+                
+                try:
+                    with open(file_path, 'rb') as f:
+                        f.read(1)
+                except IOError as e:
+                    if attempt < max_retries - 1:
+                        self.logger.warning(f"文件被占用，{retry_delay}秒后重试 ({attempt + 1}/{max_retries}): {file_path}")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        self.logger.warning(f"文件被占用或无法访问，跳过: {file_path} - {e}")
+                        return
+            
+            except Exception as outer_e:
+                if attempt < max_retries - 1:
+                    self.logger.warning(f"发生错误，{retry_delay}秒后重试 ({attempt + 1}/{max_retries}): {outer_e}")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    self.logger.error(f"处理图片失败 {file_path}: {str(outer_e)}")
+                    return
             
             md5 = self.calculate_md5(file_path)
             
@@ -158,9 +200,10 @@ class ImageUploader(FileSystemEventHandler):
                         self.logger.error(f"清理本地文件失败: {e}")
             else:
                 self.logger.error(f"数据库写入失败: {db_result.get('message', '未知错误')}")
-                
-        except Exception as e:
-            self.logger.error(f"处理图片失败 {file_path}: {str(e)}")
+            
+            return
+        
+        self.logger.error(f"达到最大重试次数，上传失败: {file_path}")
     
     def upload_to_cos(self, cloud_path, file_content):
         try:
