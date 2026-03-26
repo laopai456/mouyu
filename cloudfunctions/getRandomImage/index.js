@@ -13,7 +13,7 @@ exports.main = async (event, context) => {
     const seenIds = event.seenIds || [];
 
     let query = db.collection('images').where({ status: 1 });
-    
+
     if (seenIds.length > 0) {
       query = db.collection('images').where({
         status: 1,
@@ -29,15 +29,20 @@ exports.main = async (event, context) => {
     const images = [];
     const usedIndexes = new Set();
 
-    const fetchCount = Math.min(requestCount, totalResult.total);
+    for (let i = 0; i < requestCount; i++) {
+      const countResult = await query.count();
+      const availableTotal = countResult.total;
 
-    for (let i = 0; i < fetchCount; i++) {
+      if (availableTotal === 0) {
+        break;
+      }
+
       let randomIndex;
       let attempts = 0;
-      const maxAttempts = 20;
+      const maxAttempts = 30;
 
       do {
-        randomIndex = Math.floor(Math.random() * totalResult.total);
+        randomIndex = Math.floor(Math.random() * availableTotal);
         attempts++;
       } while (usedIndexes.has(randomIndex) && attempts < maxAttempts);
 
@@ -58,13 +63,13 @@ exports.main = async (event, context) => {
 
     if (images.length > 0) {
       const fileIDs = images.map(img => img.url).filter(url => url);
-      
+
       if (fileIDs.length > 0) {
         try {
           const tempUrlResult = await cloud.getTempFileURL({
             fileList: fileIDs
           });
-          
+
           const urlMap = {};
           if (tempUrlResult.fileList) {
             tempUrlResult.fileList.forEach(item => {
@@ -73,7 +78,7 @@ exports.main = async (event, context) => {
               }
             });
           }
-          
+
           images.forEach(img => {
             if (urlMap[img.url]) {
               img.tempUrl = urlMap[img.url];
@@ -83,7 +88,7 @@ exports.main = async (event, context) => {
           console.error('获取临时链接失败', err);
         }
       }
-      
+
       return { success: true, images: images };
     }
 

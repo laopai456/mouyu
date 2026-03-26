@@ -14,8 +14,8 @@ exports.main = async (event, context) => {
       .where({ openid: OPENID, date: today })
       .count();
 
-    if (logRes.total >= 1) {
-      return { success: false, msg: '今天已经送过花了' };
+    if (logRes.total >= 3) {
+      return { success: false, msg: '今天送花次数用完了' };
     }
 
     await db.collection('like_logs').add({
