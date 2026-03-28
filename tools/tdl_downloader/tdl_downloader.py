@@ -2,12 +2,15 @@ import subprocess
 import json
 import os
 import hashlib
+import re
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
-from PIL import Image
-import tensorflow as tf
+try:
+    from paddleocr import PaddleOCR
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
 
 TDL_PATH = r"C:\tdl\tdl.exe"
 PROXY = "socks5://127.0.0.1:7897"
@@ -25,46 +28,30 @@ MIN_FILE_SIZE_KB = 30
 
 BASE_DIR = Path(__file__).parent
 MD5_CACHE_FILE = BASE_DIR / "cache" / "md5_cache.json"
-MODEL_PATH = BASE_DIR / "converted_model.tflite"
 
-_interpreter = None
-_input_details = None
-_output_details = None
-_input_shape = None
+_ocr = None
 
 
-def load_model():
-    global _interpreter, _input_details, _output_details, _input_shape
-    if _interpreter is None:
-        if not MODEL_PATH.exists():
-            print(f"模型文件不存在: {MODEL_PATH}")
-            return False
-        _interpreter = tf.lite.Interpreter(model_path=str(MODEL_PATH))
-        _interpreter.allocate_tensors()
-        _input_details = _interpreter.get_input_details()
-        _output_details = _interpreter.get_output_details()
-        _input_shape = _input_details[0]['shape']
-        print(f"模型加载成功，输入尺寸: {_input_shape[1]}x{_input_shape[2]}")
-    return True
+def get_ocr():
+    global _ocr
+    if _ocr is None and OCR_AVAILABLE:
+        _ocr = PaddleOCR(use_angle_cls=False, lang='ch', show_log=False)
+    return _ocr
 
 
-def is_meme(image_path, threshold=0.5):
-    if not load_model():
+def has_text(image_path, min_confidence=0.7):
+    if not OCR_AVAILABLE:
         return True
     try:
-        img = Image.open(image_path).convert('RGB')
-        img = img.resize((_input_shape[1], _input_shape[2]))
-        img = np.array(img, dtype=np.float32) / 255.0
-        img = np.expand_dims(img, axis=0)
-
-        _interpreter.set_tensor(_input_details[0]['index'], img)
-        _interpreter.invoke()
-        prob = _interpreter.get_tensor(_output_details[0]['index'])[0][0]
-
-        return prob > threshold
+        ocr = get_ocr()
+        result = ocr.ocr(image_path, cls=False)
+        if result and result[0]:
+            for line in result[0]:
+                if line[1][1] > min_confidence:
+                    return True
     except Exception as e:
-        print(f"模型推理失败: {e}")
-        return True
+        print(f"OCR检测失败: {e}")
+    return False
 
 
 def load_md5_cache():
@@ -124,16 +111,72 @@ def filter_and_download(export_file, download_dir, channel):
     messages = data.get("messages", [])
     print(f"获取消息数: {len(messages)}")
 
-    filtered = []
+    file_list = []
     for msg in messages:
         file_path = msg.get("file")
         if not file_path:
             continue
         ext = file_path.split(".")[-1].lower() if "." in file_path else ""
-        if ext in INCLUDE_TYPES:
-            filtered.append(msg)
+        if ext not in INCLUDE_TYPES:
+            continue
+        file_list.append(msg)
 
-    print(f"图片消息数: {len(filtered)}")
+    print(f"图片消息数: {len(file_list)}")
+
+    if not file_list:
+        print("没有找到图片")
+        return
+
+    sequential_groups = []
+    current_group = []
+    last_base = None
+    last_num = None
+
+    for msg in file_list:
+        filename = msg.get("file", "")
+        name_part = filename.rsplit(".", 1)[0] if "." in filename else filename
+
+        if name_part.isdigit():
+            base = ""
+            num = int(name_part)
+        else:
+            match = re.match(r"^(.+?)(\d+)$", name_part)
+            if match:
+                base = match.group(1)
+                num = int(match.group(2))
+            else:
+                base = name_part
+                num = None
+
+        is_sequential = False
+        if num is not None and last_num is not None:
+            if base == last_base and num == last_num + 1:
+                is_sequential = True
+
+        if is_sequential:
+            if not current_group:
+                current_group.append(prev_msg)
+            current_group.append(msg)
+        else:
+            if current_group and len(current_group) >= 3:
+                sequential_groups.append(current_group)
+            current_group = []
+
+        prev_msg = msg
+        last_base = base
+        last_num = num
+
+    if current_group and len(current_group) >= 3:
+        sequential_groups.append(current_group)
+
+    sequential_files = set()
+    for group in sequential_groups:
+        for msg in group:
+            sequential_files.add(msg.get("file"))
+
+    filtered = [msg for msg in file_list if msg.get("file") not in sequential_files]
+
+    print(f"过滤后图片数: {len(filtered)} (跳过连续漫画: {len(sequential_files)} 张)")
 
     if not filtered:
         print("没有找到图片")
@@ -168,8 +211,8 @@ def filter_and_download(export_file, download_dir, channel):
                 os.remove(file_path)
                 continue
 
-            if not is_meme(file_path):
-                print(f"非梗图，删除: {filename}")
+            if not has_text(file_path):
+                print(f"无文字内容，删除: {filename}")
                 os.remove(file_path)
                 not_meme += 1
                 continue
@@ -200,10 +243,9 @@ def main():
         print(f"错误: tdl 不存在于 {TDL_PATH}")
         return
 
-    if not MODEL_PATH.exists():
-        print(f"错误: 模型文件不存在: {MODEL_PATH}")
-        print("请下载模型到该路径")
-        return
+    if not OCR_AVAILABLE:
+        print("警告: PaddleOCR 未安装，将跳过文字检测")
+        print("请运行: pip install paddleocr paddlepaddle")
 
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
