@@ -2,7 +2,7 @@
 
 > 微信小程序 | 沙雕趣图随机展示
 
-> 最后更新：2026-03-26
+> 最后更新：2026-03-28
 
 ---
 
@@ -13,7 +13,7 @@
 | 项目类型 | 微信小程序 |
 | 核心功能 | 随机展示梗图，用户上传，踩/送花/哈哈功能 |
 | 设计原则 | 极简、傻瓜化，开源 |
-| 当前版本 | v1.0.5 |
+| 当前版本 | v1.0.6 |
 
 ---
 
@@ -38,6 +38,11 @@ mouyu/
 │   │   ├── uploader.py                # 主程序
 │   │   ├── requirements.txt          # 依赖包
 │   │   └── 启动.bat                   # Windows 启动脚本
+│   ├── tdl_downloader/                # Telegram 图片下载器
+│   │   ├── tdl_downloader.py          # 主程序
+│   │   ├── converted_model.tflite     # 梗图检测模型
+│   │   ├── cache/                     # MD5缓存
+│   │   └── requirements.txt           # 依赖包
 │   └── telegram-decrypter/            # Telegram 缓存解密工具
 │       ├── main.py                    # 主程序
 │       ├── setup.py                   # 安装脚本
@@ -250,7 +255,51 @@ python uploader.py
 
 ---
 
-## 九、 Telegram Decrypter 工具
+## 九、TDL 图片下载器
+
+> 从 Telegram 频道批量下载梗图
+
+### 9.1 功能
+
+- 批量下载指定 Telegram 频道图片
+- TFLite 模型智能过滤非梗图（准确率 92%）
+- MD5 去重，避免重复下载
+- 文件大小过滤（<30KB 自动删除）
+- 多频道配置，自定义下载数量
+- 缓存管理，支持增量下载
+
+### 9.2 依赖
+
+- Python 3.12+
+- TensorFlow 2.21+
+- tdl (Telegram Downloader)
+
+### 9.3 安装和使用
+
+```bash
+# 安装依赖
+pip install -r requirements.txt
+
+# 配置频道和代理（编辑 tdl_downloader.py）
+CHANNELS = {
+    "woshadiao": 100,      # 频道名: 下载数量
+    "shadiao_refuse": 150,
+}
+PROXY = "socks5://127.0.0.1:7897"
+
+# 运行
+python tdl_downloader.py
+```
+
+### 9.4 过滤逻辑
+
+1. 文件大小 < 30KB → 删除（表情包）
+2. TFLite 模型判断非梗图 → 删除
+3. MD5 重复 → 删除
+
+---
+
+## 十、 Telegram Decrypter 工具
 
 > Telegram Desktop 缓存数据解密工具
 
@@ -534,6 +583,34 @@ wx.cloud.callFunction({
 
 ---
 
-## 十七、许可证
+## 十八、外部依赖
+
+### 18.1 工具
+
+| 工具 | 用途 | 地址 |
+|------|------|------|
+| tdl | Telegram 频道媒体下载 | https://github.com/iyear/tdl |
+| telegram-decrypter | Telegram 缓存解密 | https://github.com/torinak/telegram-decrypter |
+
+### 18.2 Python 库
+
+| 库 | 用途 | 工具 |
+|------|------|------|
+| tensorflow | TFLite 模型推理 | tdl_downloader |
+| numpy | 数值计算 | tdl_downloader |
+| pillow | 图片处理 | tdl_downloader |
+| tgcrypto | Telegram 加密解密 | telegram-decrypter |
+| cos-python-sdk-v5 | 腾讯云 COS 上传 | uploader |
+| requests | HTTP 请求 | uploader |
+
+### 18.3 模型
+
+| 模型 | 用途 | 来源 |
+|------|------|------|
+| converted_model.tflite | 梗图/非梗图二分类 | https://github.com/skothari07/Meme-Detection-Android-App-using-Tensorflow-Lite |
+
+---
+
+## 十九、许可证
 
 本项目基于 MIT 许可证开源。
