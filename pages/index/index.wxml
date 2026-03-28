@@ -11,7 +11,7 @@
     <view class="image-wrapper">
       <block wx:if="{{noMoreImages}}">
         <view class="no-more">
-          <text class="no-more-text">上会儿班吧，球球了。</text>
+          <text class="no-more-text">{{noMoreText}}</text>
         </view>
       </block>
       <block wx:else>
@@ -28,9 +28,9 @@
 
   <view class="header">
     <view class="header-left">
-      <view class="like-btn" bindtap="onLike">
+      <view class="like-btn {{hasLikedToday ? 'disabled' : ''}}" bindtap="onLike">
         <text class="like-icon">🌸</text>
-        <text class="action-count">1</text>
+        <text class="action-count">{{likeCount}}</text>
       </view>
       <view class="slogan-wrapper">
         <text class="slogan" bindtap="onTitleTap">热爱可抵漫长岁月</text>
@@ -42,9 +42,9 @@
     </view>
   </view>
 
-  <view class="dislike-btn" bindtap="onDislike" wx:if="{{!noMoreImages}}">
+  <view class="dislike-btn {{dislikeCount <= 0 ? 'disabled' : ''}}" bindtap="onDislike" wx:if="{{!noMoreImages && dislikeCount > 0}}">
     <text class="dislike-icon">💩</text>
-    <text class="action-count">3</text>
+    <text class="action-count">{{dislikeCount}}</text>
   </view>
 
   <view class="laugh-btn" bindtap="onLaugh">

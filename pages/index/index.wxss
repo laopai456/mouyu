@@ -112,6 +112,11 @@ page {
   margin-top: 2rpx;
 }
 
+.like-btn.disabled, .dislike-btn.disabled {
+  opacity: 0.4;
+  filter: grayscale(0.8);
+}
+
 .dislike-btn {
   position: fixed;
   left: 40rpx;

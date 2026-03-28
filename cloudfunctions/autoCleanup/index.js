@@ -7,14 +7,14 @@ const db = cloud.database();
 exports.main = async (event, context) => {
   try {
     const now = new Date();
-    const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
-    const deleteBeforeDate = threeDaysAgo.toISOString().split('T')[0];
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const deleteBeforeDate = sevenDaysAgo.toISOString().split('T')[0];
     
     console.log('开始清理，删除日期:', deleteBeforeDate, '之前的图片');
     
     const imagesToDelete = await db.collection('images')
       .where({
-        createTime: db.command.lt(threeDaysAgo.getTime())
+        createTime: db.command.lt(sevenDaysAgo.getTime())
       })
       .get();
     

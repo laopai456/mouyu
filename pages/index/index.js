@@ -5,6 +5,16 @@ const MIN_QUEUE_SIZE = 2;
 const ADMIN_TAP_COUNT = 5;
 const ADMIN_TAP_INTERVAL = 1000;
 
+const NO_MORE_TEXTS = [
+  '上会儿班吧，球球了。',
+  '天气好，天气不好，天气刚刚好。',
+  '电量耗尽，请充电后再刷~',
+  '没了，已被掏空。',
+  '图图跑了，可能是饿的。',
+  '什么都没了，真的。',
+  '精神状态：已离线'
+];
+
 Page({
   data: {
     imageUrl: '',
@@ -14,6 +24,7 @@ Page({
     isLoading: false,
     isRefreshing: false,
     noMoreImages: false,
+    noMoreText: '',
     hasLikedToday: false,
     canUpload: false,
     flyingTexts: [],
@@ -33,6 +44,9 @@ Page({
   dislikedImages: new Set(),
 
   onLoad() {
+    const savedSeenIds = wx.getStorageSync('seenIds') || [];
+    this.seenIds = savedSeenIds;
+
     this.checkLikeStatus();
     this.checkUploadPermission();
     this.initImages();
@@ -74,7 +88,11 @@ Page({
         this.showNextImage();
       } else {
         console.log('没有获取到图片');
-        this.setData({ noMoreImages: true });
+        const dayOfWeek = new Date().getDay();
+        this.setData({
+          noMoreImages: true,
+          noMoreText: NO_MORE_TEXTS[dayOfWeek]
+        });
       }
     } catch (err) {
       console.error('初始化图片失败', err);
@@ -104,7 +122,8 @@ Page({
             }
           } else {
             if (res.result && res.result.noMore) {
-              this.setData({ noMoreImages: true });
+              const dayOfWeek = new Date().getDay();
+              this.setData({ noMoreImages: true, noMoreText: NO_MORE_TEXTS[dayOfWeek] });
               resolve([]);
             } else {
               reject(new Error(res.result?.message || '获取失败'));
@@ -126,6 +145,7 @@ Page({
 
     const image = this.imageQueue.shift();
     this.seenIds.push(image._id);
+    wx.setStorageSync('seenIds', this.seenIds);
 
     const displayUrl = image.tempUrl || image.url;
 
@@ -204,11 +224,19 @@ Page({
   },
 
   onLike() {
+    console.log('onLike 被调用', 'imageId:', this.data.imageId, 'hasLikedToday:', this.data.hasLikedToday);
+
     if (!this.data.imageId) {
+      console.log('imageId 为空，直接返回');
       return;
     }
 
     if (this.data.hasLikedToday) {
+      console.log('今天已送过花，直接返回');
+      if (this.data.laughMode) {
+        this.setData({ laughMode: false });
+        wx.setStorageSync('laughModeUnlocked', '');
+      }
       return;
     }
 
@@ -218,16 +246,22 @@ Page({
         imageId: this.data.imageId,
       },
       success: (res) => {
-        if (res.result && res.result.success) {
-          const today = new Date().toISOString().split('T')[0];
-          wx.setStorageSync('lastLikeDate', today);
-          wx.setStorageSync('laughModeUnlocked', today);
-          this.setData({
-            likeCount: this.data.likeCount + 1,
-            hasLikedToday: true,
-            laughMode: true
-          });
+        console.log('送花结果:', res);
+        if (res.result && res.result.success === false) {
+          console.log('送花失败:', res.result.msg);
+          return;
         }
+        const today = new Date().toISOString().split('T')[0];
+        wx.setStorageSync('lastLikeDate', today);
+        wx.setStorageSync('laughModeUnlocked', today);
+        this.setData({
+          likeCount: this.data.likeCount + 1,
+          hasLikedToday: true,
+          laughMode: true
+        });
+      },
+      fail: (err) => {
+        console.error('送花失败', err);
       }
     });
   },
@@ -389,7 +423,7 @@ Page({
     }
 
     const flyingTexts = [...this.data.flyingTexts, flyingText];
-    this.setData({ flyingTexts, stageLight: true });
+    this.setData({ flyingTexts });
 
     if (this.laughTimer) {
       clearTimeout(this.laughTimer);
