@@ -39,12 +39,16 @@ exports.main = async (event, context) => {
     }
 
     if (md5) {
-      const existRes = await db.collection('images')
-        .where({ md5, status: db.command.in([0, 1]) })
-        .count();
+      const [existRes, blacklistRes] = await Promise.all([
+        db.collection('images').where({ md5, status: db.command.in([0, 1, 2]) }).count(),
+        db.collection('md5_blacklist').where({ md5 }).count()
+      ]);
 
       if (existRes.total > 0) {
         return { success: false, msg: '该图片已存在，请勿重复上传' };
+      }
+      if (blacklistRes.total > 0) {
+        return { success: false, msg: '该图片已被永久拒绝，无法上传' };
       }
     }
 

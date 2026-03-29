@@ -4,5 +4,9 @@
   "description": "木偶鱼PAF - 梗图随机展示小程序",
   "dependencies": {
     "wx-server-sdk": "~2.6.3"
+  },
+  "cloudfunction-config": {
+    "memorySize": 256,
+    "timeout": 60
   }
 }

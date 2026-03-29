@@ -20,6 +20,7 @@
     .btn-primary { background: #667eea; color: #fff; }
     .btn-danger { background: #ff6b6b; color: #fff; }
     .btn-success { background: #52c41a; color: #fff; }
+    .btn-warning { background: #ffa500; color: #fff; }
     .btn:hover { opacity: 0.9; }
     
     .login-box { text-align: center; padding: 60px 20px; background: #fff; border-radius: 12px; }
@@ -470,6 +471,9 @@
         listEl.innerHTML = `
           <div class="batch-actions">
             <label><input type="checkbox" onchange="toggleSelectAll(this, ${status})"> 全选</label>
+            ${status === 2 ? `
+              <button class="btn btn-warning" onclick="batchAddToBlacklist()">加入黑名单</button>
+            ` : ''}
             <button class="btn btn-danger" onclick="batchDelete(${status})">批量删除</button>
             <span class="selected-count" id="selectedCount-${status}">已选择 0 张</span>
           </div>
@@ -573,7 +577,31 @@
         alert('删除失败：' + err.message);
       }
     }
-    
+
+    async function batchAddToBlacklist() {
+      if (!confirm(`确定要将已拒绝图片的MD5加入黑名单吗？\n下次上传同样图片会被拦截`)) return;
+
+      try {
+        const result = await app.callFunction({
+          name: 'deleteImages',
+          data: {
+            action: 'migrateBlacklist'
+          }
+        });
+
+        if (result.result && result.result.success) {
+          alert(result.result.message);
+          loadImages(2);
+          loadStats();
+        } else {
+          alert('操作失败：' + (result.result?.message || '未知错误'));
+        }
+      } catch (err) {
+        console.error('操作失败', err);
+        alert('操作失败：' + err.message);
+      }
+    }
+
     function formatTime(timestamp) {
       const d = new Date(timestamp);
       return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;

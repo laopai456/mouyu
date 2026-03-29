@@ -3,6 +3,8 @@ node_modules/
 *.log
 .DS_Store
 
+.venv/
+
 tools/uploader/config.json
 tools/uploader/cache/
 tools/uploader/logs/

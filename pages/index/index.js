@@ -31,6 +31,7 @@ Page({
     laughCount: 0,
     laughMode: false,
     stageLight: false,
+    hasVisitedBefore: false,
   },
 
   imageQueue: [],
@@ -45,7 +46,9 @@ Page({
 
   onLoad() {
     const savedSeenIds = wx.getStorageSync('seenIds') || [];
+    const hasVisited = wx.getStorageSync('hasVisitedBefore') || false;
     this.seenIds = savedSeenIds;
+    this.setData({ hasVisitedBefore: hasVisited });
 
     this.checkLikeStatus();
     this.checkUploadPermission();
@@ -103,12 +106,14 @@ Page({
 
   fetchImages(count) {
     return new Promise((resolve, reject) => {
-      console.log('调用云函数 getRandomImage, count:', count, 'seenIds:', this.seenIds.length);
+      const isFirstVisit = !this.data.hasVisitedBefore;
+      console.log('调用云函数 getRandomImage, count:', count, 'seenIds:', this.seenIds.length, 'isFirstVisit:', isFirstVisit);
       wx.cloud.callFunction({
         name: 'getRandomImage',
-        data: { 
+        data: {
           count,
-          seenIds: this.seenIds 
+          seenIds: this.seenIds,
+          isFirstVisit
         },
         success: (res) => {
           console.log('云函数返回:', res);
@@ -146,6 +151,11 @@ Page({
     const image = this.imageQueue.shift();
     this.seenIds.push(image._id);
     wx.setStorageSync('seenIds', this.seenIds);
+
+    if (!this.data.hasVisitedBefore) {
+      wx.setStorageSync('hasVisitedBefore', true);
+      this.setData({ hasVisitedBefore: true });
+    }
 
     const displayUrl = image.tempUrl || image.url;
 
