@@ -4,18 +4,15 @@ import time
 import json
 import hashlib
 import logging
-import hmac
-import base64
-import hashlib as sha256
 import threading
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlencode
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from qcloud_cos import CosConfig
 from qcloud_cos import CosS3Client
-import requests
+from tencentcloud.common import credential
+from tencentcloud.scf.v20180416 import scf_client, models
 
 class ImageUploader(FileSystemEventHandler):
     def __init__(self, config):
@@ -52,15 +49,20 @@ class ImageUploader(FileSystemEventHandler):
         self.secret_key = os.environ.get('TENCENT_SECRET_KEY') or cos_config.get('secret_key', '')
         
         if self.secret_id and self.secret_key:
-            config = CosConfig(
+            cos_conf = CosConfig(
                 Region=self.region,
                 SecretId=self.secret_id,
                 SecretKey=self.secret_key
             )
-            self.client = CosS3Client(config)
+            self.cos_client = CosS3Client(cos_conf)
             self.logger.info("COS 客户端初始化成功")
+            
+            scf_cred = credential.Credential(self.secret_id, self.secret_key)
+            self.scf_client = scf_client.ScfClient(scf_cred, self.region)
+            self.logger.info("SCF 客户端初始化成功")
         else:
-            self.client = None
+            self.cos_client = None
+            self.scf_client = None
             self.logger.warning("未配置 COS 密钥，请设置环境变量 TENCENT_SECRET_ID 和 TENCENT_SECRET_KEY")
             self.logger.warning("或在 config.json 中配置 secret_id 和 secret_key")
         
@@ -207,8 +209,8 @@ class ImageUploader(FileSystemEventHandler):
     
     def upload_to_cos(self, cloud_path, file_content):
         try:
-            if self.client and self.bucket:
-                response = self.client.put_object(
+            if self.cos_client and self.bucket:
+                response = self.cos_client.put_object(
                     Bucket=self.bucket,
                     Body=file_content,
                     Key=cloud_path
@@ -232,43 +234,6 @@ class ImageUploader(FileSystemEventHandler):
                 'message': str(e)
             }
     
-    def sign_tencent_cloud(self, payload, service='scf'):
-        algorithm = 'TC3-HMAC-SHA256'
-        timestamp = int(time.time())
-        date = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d')
-        
-        http_request_method = 'POST'
-        canonical_uri = '/'
-        canonical_querystring = ''
-        ct = 'application/json'
-        canonical_headers = f'content-type:{ct}\nhost:{service}.tencentcloudapi.com\n'
-        signed_headers = 'content-type;host'
-        
-        hashed_request_payload = hashlib.sha256(payload.encode('utf-8')).hexdigest()
-        canonical_request = f'{http_request_method}\n{canonical_uri}\n{canonical_querystring}\n{canonical_headers}\n{signed_headers}\n{hashed_request_payload}'
-        
-        credential_scope = f'{date}/{service}/tc3_request'
-        hashed_canonical_request = hashlib.sha256(canonical_request.encode('utf-8')).hexdigest()
-        string_to_sign = f'{algorithm}\n{timestamp}\n{credential_scope}\n{hashed_canonical_request}'
-        
-        def hmac_sha256(key, msg):
-            return hmac.new(key, msg.encode('utf-8'), hashlib.sha256).digest()
-        
-        secret_date = hmac_sha256(('TC3' + self.secret_key).encode('utf-8'), date)
-        secret_service = hmac_sha256(secret_date, service)
-        secret_signing = hmac_sha256(secret_service, 'tc3_request')
-        signature = hmac.new(secret_signing, string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
-        
-        authorization = f'{algorithm} Credential={self.secret_id}/{credential_scope}, SignedHeaders={signed_headers}, Signature={signature}'
-        
-        return {
-            'Authorization': authorization,
-            'X-TC-Timestamp': str(timestamp),
-            'X-TC-Version': '2018-04-16',
-            'X-TC-Action': 'InvokeFunction',
-            'X-TC-Region': self.region
-        }
-    
     def write_to_database(self, file_id, md5):
         try:
             now = datetime.now()
@@ -285,32 +250,20 @@ class ImageUploader(FileSystemEventHandler):
                 'month': month
             }
             
-            payload = json.dumps({
-                'FunctionName': 'autoUpload',
-                'Namespace': self.env_id,
-                'Event': json.dumps(event_data, ensure_ascii=False)
-            })
+            req = models.InvokeRequest()
+            req.FunctionName = 'autoUpload'
+            req.Namespace = self.env_id
+            req.ClientContext = json.dumps(event_data, ensure_ascii=False)
             
-            headers = self.sign_tencent_cloud(payload, 'scf')
-            headers['Content-Type'] = 'application/json'
-            headers['Host'] = 'scf.tencentcloudapi.com'
+            resp = self.scf_client.Invoke(req)
+            ret_msg = json.loads(resp.Result.RetMsg)
             
-            response = requests.post(
-                'https://scf.tencentcloudapi.com/',
-                headers=headers,
-                data=payload,
-                timeout=30
-            )
-            
-            result = response.json()
-            
-            if result.get('Response', {}).get('Error'):
-                error = result['Response']['Error']
-                self.logger.error(f"API 错误: {error}")
-                return {'success': False, 'message': error.get('Message', 'Unknown error')}
-            
-            self.logger.info(f"云函数调用成功: {result.get('Response', {}).get('Result', '')}")
-            return {'success': True}
+            if ret_msg.get('success'):
+                self.logger.info(f"云函数调用成功: {ret_msg.get('msg', '')}")
+                return {'success': True}
+            else:
+                self.logger.error(f"云函数调用失败: {ret_msg.get('msg', '未知错误')}")
+                return {'success': False, 'message': ret_msg.get('msg', 'Unknown error')}
             
         except Exception as e:
             self.logger.error(f"写入数据库异常: {str(e)}")

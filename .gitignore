@@ -7,6 +7,10 @@ tools/uploader/config.json
 tools/uploader/cache/
 tools/uploader/logs/
 
+tools/tdl_downloader/cache/
+tools/tdl_downloader/__pycache__/
+tools/tdl_downloader/*.pyc
+
 tools/telegram-parser/temp_tdata/
 tools/telegram-parser/__pycache__/
 tools/telegram-parser/**/__pycache__/

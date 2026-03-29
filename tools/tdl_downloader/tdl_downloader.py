@@ -6,52 +6,22 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-try:
-    from paddleocr import PaddleOCR
-    OCR_AVAILABLE = True
-except ImportError:
-    OCR_AVAILABLE = False
-
 TDL_PATH = r"C:\tdl\tdl.exe"
 PROXY = "socks5://127.0.0.1:7897"
 
 CHANNELS = {
-    "woshadiao": 100,
-    "shadiao_refuse": 150,
-    "xinjingdaily": 150,
-    "wtmsd": 100,
+    "woshadiao": 100    ,
+    "shadiao_refuse": 80,
+    "xinjingdaily": 200,
+    "wtmsd": 160,
 }
 
 DOWNLOAD_DIR = r"C:\Users\w\Downloads\tdl"
 INCLUDE_TYPES = ["jpg", "jpeg", "png", "gif", "webp", "bmp"]
-MIN_FILE_SIZE_KB = 30
+MIN_FILE_SIZE_KB = 20
 
 BASE_DIR = Path(__file__).parent
 MD5_CACHE_FILE = BASE_DIR / "cache" / "md5_cache.json"
-
-_ocr = None
-
-
-def get_ocr():
-    global _ocr
-    if _ocr is None and OCR_AVAILABLE:
-        _ocr = PaddleOCR(use_angle_cls=False, lang='ch', show_log=False)
-    return _ocr
-
-
-def has_text(image_path, min_confidence=0.7):
-    if not OCR_AVAILABLE:
-        return True
-    try:
-        ocr = get_ocr()
-        result = ocr.ocr(image_path, cls=False)
-        if result and result[0]:
-            for line in result[0]:
-                if line[1][1] > min_confidence:
-                    return True
-    except Exception as e:
-        print(f"OCR检测失败: {e}")
-    return False
 
 
 def load_md5_cache():
@@ -87,11 +57,56 @@ def run_cmd(cmd, desc=""):
     print(f"\n{'='*50}")
     print(f"{desc}")
     print(f"{'='*50}")
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if result.returncode != 0:
-        print(f"Error: {result.stderr}")
+    process = subprocess.Popen(
+        cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace"
+    )
+
+    import threading
+    import time
+    output_lines = []
+    start_time = time.time()
+
+    def read_output():
+        try:
+            for line in process.stdout:
+                output_lines.append(line)
+                print(line, end="", flush=True)
+        except:
+            pass
+
+    thread = threading.Thread(target=read_output, daemon=True)
+    thread.start()
+
+    last_output = 0
+    last_output_time = time.time()
+    timeout = 200
+    no_output_timeout = 120
+
+    while process.poll() is None:
+        time.sleep(0.5)
+        current_len = len(output_lines)
+        if current_len > last_output:
+            last_output = current_len
+            last_output_time = time.time()
+        elif time.time() - last_output_time > no_output_timeout:
+            print(f"\n\n{no_output_timeout}秒无输出，可能卡住，尝试继续...")
+            try:
+                process.stdin.write("y\n")
+                process.stdin.flush()
+            except:
+                pass
+            last_output_time = time.time()
+        elif time.time() - start_time > timeout:
+            print(f"\n\n总超时 ({timeout}秒)，终止命令")
+            process.terminate()
+            break
+
+    thread.join(5)
+
+    if process.returncode != 0:
+        print(f"\nError: 命令执行失败，返回码 {process.returncode}")
         return False
-    print(result.stdout)
     return True
 
 
@@ -191,13 +206,15 @@ def filter_and_download(export_file, download_dir, channel):
 
     md5_cache = load_md5_cache()
 
+    cached_files = set(os.listdir(target_dir)) if os.path.exists(target_dir) else set()
+    print(f"目录已有 {len(cached_files)} 个文件")
+
     cmd = f'"{TDL_PATH}" dl -f "{filtered_file}" -d "{target_dir}" --proxy {PROXY} --skip-same'
     run_cmd(cmd, f"下载 {channel} 的 {len(filtered)} 张图片到 {target_dir}")
 
-    new_files = [f for f in os.listdir(target_dir) if os.path.isfile(os.path.join(target_dir, f))]
+    new_files = [f for f in os.listdir(target_dir) if os.path.isfile(os.path.join(target_dir, f)) and f not in cached_files]
     skipped = 0
     downloaded = 0
-    not_meme = 0
 
     for filename in new_files:
         if not is_image(filename):
@@ -209,12 +226,6 @@ def filter_and_download(export_file, download_dir, channel):
             if file_size_kb < MIN_FILE_SIZE_KB:
                 print(f"图片太小({file_size_kb:.0f}KB)，删除: {filename}")
                 os.remove(file_path)
-                continue
-
-            if not has_text(file_path):
-                print(f"无文字内容，删除: {filename}")
-                os.remove(file_path)
-                not_meme += 1
                 continue
 
             md5 = calculate_md5(file_path)
@@ -233,7 +244,7 @@ def filter_and_download(export_file, download_dir, channel):
             print(f"处理失败 {filename}: {e}")
 
     save_md5_cache(md5_cache)
-    print(f"下载完成: 新增 {downloaded} 张, 跳过重复 {skipped} 张, 过滤非梗图 {not_meme} 张")
+    print(f"下载完成: 新增 {downloaded} 张, 跳过重复 {skipped} 张")
 
     os.remove(filtered_file)
 
@@ -242,10 +253,6 @@ def main():
     if not os.path.exists(TDL_PATH):
         print(f"错误: tdl 不存在于 {TDL_PATH}")
         return
-
-    if not OCR_AVAILABLE:
-        print("警告: PaddleOCR 未安装，将跳过文字检测")
-        print("请运行: pip install paddleocr paddlepaddle")
 
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
