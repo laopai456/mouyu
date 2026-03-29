@@ -75,6 +75,25 @@ exports.main = async (event, context) => {
     }
 
     if (action === 'review') {
+      const imageRes = await db.collection('images').doc(imageId).get();
+      const image = imageRes.data;
+
+      if (status === 2 && image && image.md5) {
+        const existRes = await db.collection('md5_blacklist')
+          .where({ md5: image.md5 })
+          .count();
+
+        if (existRes.total === 0) {
+          await db.collection('md5_blacklist').add({
+            data: {
+              md5: image.md5,
+              createTime: Date.now(),
+              sourceId: imageId
+            }
+          });
+        }
+      }
+
       await db.collection('images').doc(imageId).update({
         data: {
           status,

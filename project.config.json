@@ -61,6 +61,10 @@
       },
       {
         "type": "folder",
+        "value": ".venv"
+      },
+      {
+        "type": "folder",
         "value": "TelegramStorageParser"
       },
       {
