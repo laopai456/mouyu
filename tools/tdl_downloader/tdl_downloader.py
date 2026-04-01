@@ -53,61 +53,77 @@ def calculate_md5(file_path):
     return hash_md5.hexdigest()
 
 
-def run_cmd(cmd, desc=""):
+def run_cmd(cmd, desc="", max_retries=3):
     print(f"\n{'='*50}")
     print(f"{desc}")
     print(f"{'='*50}")
-    process = subprocess.Popen(
-        cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, encoding="utf-8", errors="replace"
-    )
 
-    import threading
-    import time
-    output_lines = []
-    start_time = time.time()
+    for attempt in range(max_retries):
+        process = subprocess.Popen(
+            cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace"
+        )
 
-    def read_output():
-        try:
-            for line in process.stdout:
-                output_lines.append(line)
-                print(line, end="", flush=True)
-        except:
-            pass
+        import threading
+        import time
+        output_lines = []
+        start_time = time.time()
 
-    thread = threading.Thread(target=read_output, daemon=True)
-    thread.start()
-
-    last_output = 0
-    last_output_time = time.time()
-    timeout = 200
-    no_output_timeout = 120
-
-    while process.poll() is None:
-        time.sleep(0.5)
-        current_len = len(output_lines)
-        if current_len > last_output:
-            last_output = current_len
-            last_output_time = time.time()
-        elif time.time() - last_output_time > no_output_timeout:
-            print(f"\n\n{no_output_timeout}秒无输出，可能卡住，尝试继续...")
+        def read_output():
             try:
-                process.stdin.write("y\n")
-                process.stdin.flush()
+                for line in process.stdout:
+                    output_lines.append(line)
+                    print(line, end="", flush=True)
             except:
                 pass
-            last_output_time = time.time()
-        elif time.time() - start_time > timeout:
-            print(f"\n\n总超时 ({timeout}秒)，终止命令")
-            process.terminate()
-            break
 
-    thread.join(5)
+        thread = threading.Thread(target=read_output, daemon=True)
+        thread.start()
 
-    if process.returncode != 0:
-        print(f"\nError: 命令执行失败，返回码 {process.returncode}")
-        return False
-    return True
+        last_output = 0
+        last_output_time = time.time()
+        timeout = 200
+        no_output_timeout = 120
+        stuck_count = 0
+        max_stuck = 3
+
+        while process.poll() is None:
+            time.sleep(0.5)
+            current_len = len(output_lines)
+            if current_len > last_output:
+                last_output = current_len
+                last_output_time = time.time()
+                stuck_count = 0
+            elif time.time() - last_output_time > no_output_timeout:
+                stuck_count += 1
+                print(f"\n\n{no_output_timeout}秒无输出，可能卡住 ({stuck_count}/{max_stuck})...")
+                try:
+                    process.stdin.write("y\n")
+                    process.stdin.flush()
+                except:
+                    pass
+                last_output_time = time.time()
+                if stuck_count >= max_stuck:
+                    print(f"连续{stuck_count}次卡住，终止并重启...")
+                    process.terminate()
+                    process.wait(5)
+                    break
+            elif time.time() - start_time > timeout:
+                print(f"\n\n总超时 ({timeout}秒)，终止命令")
+                process.terminate()
+                process.wait(5)
+                break
+
+        thread.join(5)
+
+        if process.returncode == 0:
+            return True
+
+        if attempt < max_retries - 1:
+            print(f"\n命令失败，返回码 {process.returncode}，重试 ({attempt + 1}/{max_retries})...")
+
+    print(f"\nError: 命令执行失败，已重试 {max_retries} 次")
+    return False
 
 
 def export_channel(channel, limit, output_file):

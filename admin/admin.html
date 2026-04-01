@@ -404,34 +404,34 @@
       const listId = ['pendingList', 'passedList', 'rejectedList'][status];
       const listEl = document.getElementById(listId);
       listEl.innerHTML = '<div class="loading">加载中...</div>';
-      
+
       try {
         const res = await db.collection('images')
           .where({ status })
           .orderBy('createTime', 'desc')
           .limit(50)
           .get();
-        
+
         if (res.data.length === 0) {
           listEl.innerHTML = '<div class="empty">暂无内容</div>';
           return;
         }
-        
-        const fileIDs = res.data.map(item => item.url).filter(url => url);
+
         let urlMap = {};
-        
+        const fileIDs = res.data.map(item => item.url).filter(url => url);
+
         if (fileIDs.length > 0) {
           try {
             console.log('获取临时 URL，文件数量:', fileIDs.length);
-            
+
             // 使用云函数获取临时 URL
             const tempUrlResult = await app.callFunction({
               name: 'getTempUrls',
               data: { fileIDs }
             });
-            
+
             console.log('云函数返回:', tempUrlResult);
-            
+
             if (tempUrlResult.result && tempUrlResult.result.success) {
               urlMap = tempUrlResult.result.urlMap;
               console.log('URL 映射表:', urlMap);
@@ -456,9 +456,9 @@
             });
           }
         }
-        
+
         console.log('最终 URL 映射表:', urlMap);
-        
+
         previewImages = res.data.map(item => ({
           id: item._id,
           url: urlMap[item.url] || item.url,
@@ -505,7 +505,7 @@
         listEl.innerHTML = '<div class="empty">加载失败</div>';
       }
     }
-    
+
     function toggleSelectAll(checkbox, status) {
       const checkboxes = document.querySelectorAll(`.image-checkbox[data-status="${status}"]`);
       checkboxes.forEach(cb => cb.checked = checkbox.checked);
