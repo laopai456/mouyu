@@ -5,8 +5,10 @@ import json
 import hashlib
 import logging
 import threading
+import io
 from datetime import datetime
 from pathlib import Path
+from PIL import Image
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from qcloud_cos import CosConfig
@@ -104,7 +106,27 @@ class ImageUploader(FileSystemEventHandler):
     def is_image(self, file_path):
         ext = Path(file_path).suffix.lower().lstrip('.')
         return ext in self.config['file_types']
-    
+
+    def compress_to_jpeg(self, file_path, quality=85):
+        """PNG/BMP等透明图转JPEG压缩"""
+        try:
+            img = Image.open(file_path)
+            if img.mode in ('RGBA', 'LA', 'P'):
+                background = Image.new('RGB', img.size, (255, 255, 255))
+                if img.mode == 'P':
+                    img = img.convert('RGBA')
+                background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
+                img = background
+            elif img.mode != 'RGB':
+                img = img.convert('RGB')
+
+            output = io.BytesIO()
+            img.save(output, format='JPEG', quality=quality, optimize=True)
+            return output.getvalue()
+        except Exception as e:
+            self.logger.error(f"图片压缩失败 {file_path}: {e}")
+            return None
+
     def calculate_md5(self, file_path):
         hash_md5 = hashlib.md5()
         with open(file_path, 'rb') as f:
@@ -164,14 +186,27 @@ class ImageUploader(FileSystemEventHandler):
                 return
             
             self.logger.info(f"开始上传: {file_path}")
-            
-            with open(file_path, 'rb') as f:
-                file_content = f.read()
-            
-            file_name = Path(file_path).name
+
+            file_ext = Path(file_path).suffix.lower()
+            needs_compress = file_ext in ['.png', '.bmp', '.webp', '.tiff']
             now = datetime.now()
             year_month = f"{now.year}-{str(now.month).zfill(2)}"
-            cloud_path = f"memes/{year_month}/{int(now.timestamp() * 1000)}_{file_name}"
+            timestamp = int(now.timestamp() * 1000)
+
+            if needs_compress:
+                self.logger.info(f"压缩图片: {file_path}")
+                file_content = self.compress_to_jpeg(file_path)
+                if not file_content:
+                    self.logger.error(f"图片压缩失败，跳过: {file_path}")
+                    return
+                cloud_filename = f"{timestamp}_{Path(file_path).stem}.jpg"
+                self.logger.info(f"压缩完成，体积: {len(file_content) / 1024:.1f}KB")
+            else:
+                with open(file_path, 'rb') as f:
+                    file_content = f.read()
+                cloud_filename = f"{timestamp}_{Path(file_path).name}"
+
+            cloud_path = f"memes/{year_month}/{cloud_filename}"
             
             upload_result = self.upload_to_cos(cloud_path, file_content)
             
