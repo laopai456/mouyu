@@ -70,17 +70,27 @@ def run_cmd(cmd, desc="", max_retries=3):
         start_time = time.time()
 
         download_count = 0
+        last_file = ""
+        channel_name = ""
 
         def read_output():
+            nonlocal download_count, last_file, channel_name
             try:
                 for line in process.stdout:
-                    if 'done!' in line:
-                        download_count += 1
-                        print(f"  ✅ 已下载 {download_count} 张", end="\r", flush=True)
-                        output_lines.append(line)
-                    elif line.strip() and not line.startswith('🔮'):
-                        output_lines.append(line)
-            except:
+                    if '%' in line and '->' in line:
+                        if '100%' in line or '100.0%' in line:
+                            parts = line.split('(')
+                            if len(parts) > 1:
+                                name_part = parts[1].split(')')[0] if ')' in parts[1] else ""
+                                if name_part and name_part != last_file:
+                                    last_file = name_part
+                                    download_count += 1
+                                    print(f"  📥 {channel_name}: {download_count} 张", end="\r", flush=True)
+                    elif '(' in line and ')' in line and ':' in line:
+                        parts = line.split('(')
+                        if len(parts) > 1:
+                            channel_name = parts[0].strip()
+            except Exception as e:
                 pass
 
         thread = threading.Thread(target=read_output, daemon=True)
@@ -88,8 +98,8 @@ def run_cmd(cmd, desc="", max_retries=3):
 
         last_output = 0
         last_output_time = time.time()
-        timeout = 200
-        no_output_timeout = 120
+        timeout = 600
+        no_output_timeout = 30
         stuck_count = 0
         max_stuck = 3
 
@@ -231,7 +241,7 @@ def filter_and_download(export_file, download_dir, channel):
     cached_files = set(os.listdir(target_dir)) if os.path.exists(target_dir) else set()
     print(f"目录已有 {len(cached_files)} 个文件")
 
-    cmd = f'"{TDL_PATH}" dl -f "{filtered_file}" -d "{target_dir}" --proxy {PROXY} --skip-same'
+    cmd = f'"{TDL_PATH}" dl -f "{filtered_file}" -d "{target_dir}" --proxy {PROXY} --skip-same --restart'
     run_cmd(cmd, f"下载 {channel} 的 {len(filtered)} 张图片到 {target_dir}")
 
     new_files = [f for f in os.listdir(target_dir) if os.path.isfile(os.path.join(target_dir, f)) and f not in cached_files]
