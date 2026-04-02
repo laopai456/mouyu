@@ -31,8 +31,6 @@ mouyu/
 │   └── project.config.json # 项目配置
 │
 ├── 🛠️ 工具目录（不上传）
-│   ├── uploader/           # 图片上传工具
-│   ├── tdl_downloader/     # Telegram 图片下载器
 │   └── telegram-decrypter/  # Telegram 缓存解密
 │
 ├── 📄 文档
@@ -164,17 +162,7 @@ python uploader.py
 
 ---
 
-## Telegram 下载器 (tdl_downloader)
-
-```bash
-pip install -r requirements.txt
-python tdl_downloader.py
-```
-
-过滤逻辑：
-1. 文件大小 < 30KB → 删除
-2. TFLite 模型判断非梗图 → 删除
-3. MD5 重复 → 删除
+## Telegram 缓存解密 (telegram-decrypter)
 
 ---
 
@@ -249,7 +237,6 @@ python tdl_downloader.py
 
 | 工具 | 用途 |
 |------|------|
-| tdl | Telegram 频道媒体下载 |
 | telegram-decrypter | Telegram 缓存解密 |
 
 ---
