@@ -22,6 +22,7 @@ MIN_FILE_SIZE_KB = 20
 
 BASE_DIR = Path(__file__).parent
 MD5_CACHE_FILE = BASE_DIR / "cache" / "md5_cache.json"
+PROGRESS_CACHE_FILE = BASE_DIR / "cache" / "progress_cache.json"
 
 
 def load_md5_cache():
@@ -37,6 +38,22 @@ def load_md5_cache():
 
 def save_md5_cache(cache):
     with open(MD5_CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, indent=2)
+
+
+def load_progress_cache():
+    PROGRESS_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if PROGRESS_CACHE_FILE.exists():
+        try:
+            with open(PROGRESS_CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+
+def save_progress_cache(cache):
+    with open(PROGRESS_CACHE_FILE, "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
 
@@ -152,9 +169,18 @@ def run_cmd(cmd, desc="", max_retries=3, target_dir=None):
     return False
 
 
-def export_channel(channel, limit, output_file):
-    cmd = f'"{TDL_PATH}" chat export -c {channel} -o "{output_file}" -T last -i {limit} --proxy {PROXY} --with-content'
-    return run_cmd(cmd, f"导出频道: {channel} (最近 {limit} 条)")
+def export_channel(channel, limit, output_file, start_id=None):
+    progress_cache = load_progress_cache()
+    last_id = progress_cache.get(channel, {}).get("last_id", 0)
+    if last_id:
+        start_id = last_id + 1
+        cmd = f'"{TDL_PATH}" chat export -c {channel} -o "{output_file}" -T id -i {start_id} --proxy {PROXY} --with-content'
+        desc = f"导出频道: {channel} (从消息ID {start_id} 开始)"
+    else:
+        cmd = f'"{TDL_PATH}" chat export -c {channel} -o "{output_file}" -T last -i {limit} --proxy {PROXY} --with-content'
+        desc = f"导出频道: {channel} (最近 {limit} 条)"
+    
+    return run_cmd(cmd, desc)
 
 
 def filter_and_download(export_file, download_dir, channel):
@@ -288,6 +314,22 @@ def filter_and_download(export_file, download_dir, channel):
     save_md5_cache(md5_cache)
     print(f"下载完成: 新增 {downloaded} 张, 跳过重复 {skipped} 张")
 
+    max_id = 0
+    if messages:
+        for msg in messages:
+            msg_id = msg.get("id", 0)
+            if msg_id and isinstance(msg_id, int):
+                max_id = max(max_id, msg_id)
+    
+    if max_id > 0:
+        progress_cache = load_progress_cache()
+        progress_cache[channel] = {
+            "last_id": max_id,
+            "last_time": datetime.now().isoformat()
+        }
+        save_progress_cache(progress_cache)
+        print(f"已记录进度: 频道 {channel} 最后消息ID: {max_id}")
+    
     os.remove(filtered_file)
 
 
