@@ -69,11 +69,17 @@ def run_cmd(cmd, desc="", max_retries=3):
         output_lines = []
         start_time = time.time()
 
+        download_count = 0
+
         def read_output():
             try:
                 for line in process.stdout:
-                    output_lines.append(line)
-                    print(line, end="", flush=True)
+                    if 'done!' in line:
+                        download_count += 1
+                        print(f"  ✅ 已下载 {download_count} 张", end="\r", flush=True)
+                        output_lines.append(line)
+                    elif line.strip() and not line.startswith('🔮'):
+                        output_lines.append(line)
             except:
                 pass
 

@@ -37,6 +37,8 @@ mouyu/
 │
 ├── 📄 文档
 │   ├── README.md           # 本文档
+│   ├── API.md             # 云函数接口文档
+│   ├── IMPROVEMENTS.md    # 项目改进建议
 │   └── REFACTOR_TRIGGER.md # 重构触发追踪
 │
 └── 🔧 管理工具
