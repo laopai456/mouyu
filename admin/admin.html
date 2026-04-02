@@ -32,6 +32,7 @@
     .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
     .tab { padding: 12px 24px; background: #fff; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; color: #666; }
     .tab.active { background: #667eea; color: #fff; }
+    .tab-divider { width: 1px; background: #ddd; margin: 0 5px; border-radius: 1px; }
     
     .upload-area { background: #fff; border-radius: 12px; padding: 30px; margin-bottom: 20px; }
     .drop-zone { border: 2px dashed #ddd; border-radius: 12px; padding: 60px 20px; text-align: center; cursor: pointer; transition: all 0.3s; }
@@ -152,6 +153,11 @@
     .modal-actions .btn {
       padding: 8px 20px;
     }
+
+    .qrcode-display {
+      text-align: center;
+      padding: 20px;
+    }
   </style>
 </head>
 <body>
@@ -203,7 +209,9 @@
       </div>
       
       <div class="tabs">
-        <button class="tab active" onclick="switchTab('upload')">批量上传</button>
+        <button class="tab active" onclick="switchTab('qrcode')">社群二维码</button>
+        <span class="tab-divider"></span>
+        <button class="tab" onclick="switchTab('upload')">批量上传</button>
         <button class="tab" onclick="switchTab('pending')">待审核</button>
         <button class="tab" onclick="switchTab('passed')">已通过</button>
         <button class="tab" onclick="switchTab('rejected')">已拒绝</button>
@@ -243,6 +251,20 @@
         <div class="image-list">
           <h3>已拒绝图片</h3>
           <div id="rejectedList"></div>
+        </div>
+      </div>
+
+      <div id="qrcodeTab" class="hidden">
+        <div class="upload-area">
+          <h3 style="margin-bottom: 15px; color: #333;">社群二维码</h3>
+          <p style="color: #666; margin-bottom: 20px;">上传社群二维码图片，用于在刷完图后展示</p>
+          <div id="qrcodePreview">
+            <div class="empty" id="qrcodeEmpty">暂无二维码，请上传</div>
+          </div>
+          <div class="qrcode-upload-actions" style="margin-top: 20px;">
+            <button class="btn btn-primary" onclick="selectQRCode()">上传二维码</button>
+            <input type="file" id="qrcodeInput" accept="image/*" style="display:none" onchange="handleQRCodeSelect(event)">
+          </div>
         </div>
       </div>
     </div>
@@ -760,6 +782,7 @@
       document.getElementById('pendingTab').classList.add('hidden');
       document.getElementById('passedTab').classList.add('hidden');
       document.getElementById('rejectedTab').classList.add('hidden');
+      document.getElementById('qrcodeTab').classList.add('hidden');
       
       if (tab === 'upload') {
         document.getElementById('uploadTab').classList.remove('hidden');
@@ -772,6 +795,9 @@
       } else if (tab === 'rejected') {
         document.getElementById('rejectedTab').classList.remove('hidden');
         loadImages(2);
+      } else if (tab === 'qrcode') {
+        document.getElementById('qrcodeTab').classList.remove('hidden');
+        loadQRCode();
       }
     }
     
@@ -994,6 +1020,122 @@
         renderPreview();
         loadStats();
       }, 1000);
+    }
+    
+    async function loadQRCode() {
+      const preview = document.getElementById('qrcodePreview');
+      
+      try {
+        const res = await db.collection('qrcode').limit(1).get();
+        
+        if (res.data && res.data.length > 0) {
+          const item = res.data[0];
+          
+          const createTime = item.createTime || item.updateTime;
+          const now = Date.now();
+          const sevenDays = 7 * 24 * 60 * 60 * 1000;
+          
+          if (createTime && now - createTime > sevenDays) {
+            await db.collection('qrcode').doc(item._id).remove();
+            preview.innerHTML = '<div class="empty" id="qrcodeEmpty">暂无二维码，请上传</div>';
+            return;
+          }
+          
+          let imageUrl = item.url;
+          
+          if (item.url && item.url.startsWith('cloud://')) {
+            const httpsUrl = transformCloudUrl(item.url);
+            if (httpsUrl) imageUrl = httpsUrl;
+          }
+          
+          preview.innerHTML = `
+            <div class="qrcode-display">
+              <img src="${imageUrl}" alt="社群二维码" style="max-width: 300px; max-height: 300px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+              <div style="margin-top: 10px; color: #999; font-size: 12px;">剩余 ${Math.max(0, Math.ceil((sevenDays - (now - createTime)) / (24 * 60 * 60 * 1000)))} 天有效</div>
+              <div style="margin-top: 15px;">
+                <button class="btn btn-primary" onclick="selectQRCode()">更换二维码</button>
+                <button class="btn btn-danger" onclick="deleteQRCode('${item._id}')">删除</button>
+              </div>
+            </div>
+          `;
+        } else {
+          preview.innerHTML = '<div class="empty" id="qrcodeEmpty">暂无二维码，请上传</div>';
+        }
+      } catch (err) {
+        console.error('加载二维码失败', err);
+        preview.innerHTML = '<div class="empty">加载失败</div>';
+      }
+    }
+    
+    function selectQRCode() {
+      document.getElementById('qrcodeInput').click();
+    }
+    
+    async function handleQRCodeSelect(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      
+      const preview = document.getElementById('qrcodePreview');
+      
+      try {
+        const now = new Date();
+        const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        const ext = file.name.split('.').pop() || 'jpg';
+        const cloudPath = `qrcode/qrcode_${Date.now()}.${ext}`;
+        
+        preview.innerHTML = '<div class="loading">上传中...</div>';
+        
+        const uploadRes = await new Promise((resolve, reject) => {
+          app.uploadFile({
+            cloudPath,
+            filePath: file,
+            onUploadProgress: (progress) => {
+              const percent = Math.round(progress.loaded / progress.total * 100);
+              preview.innerHTML = `<div class="loading">上传中... ${percent}%</div>`;
+            },
+            success: (res) => resolve(res),
+            fail: (err) => reject(err)
+          });
+        });
+        
+        preview.innerHTML = '<div class="loading">保存中...</div>';
+        
+        const existRes = await db.collection('qrcode').limit(1).get();
+        
+        if (existRes.data && existRes.data.length > 0) {
+          await db.collection('qrcode').doc(existRes.data[0]._id).update({
+            url: uploadRes.fileID,
+            updateTime: Date.now()
+          });
+        } else {
+          await db.collection('qrcode').add({
+            url: uploadRes.fileID,
+            createTime: Date.now()
+          });
+        }
+        
+        loadQRCode();
+        alert('二维码上传成功');
+        
+      } catch (err) {
+        console.error('上传失败', err);
+        preview.innerHTML = '<div class="empty" style="color:red">上传失败: ' + err.message + '</div>';
+      }
+      
+      event.target.value = '';
+    }
+    
+    async function deleteQRCode(id) {
+      if (!confirm('确定要删除二维码吗？')) return;
+      
+      try {
+        await db.collection('qrcode').doc(id).remove();
+        loadQRCode();
+        alert('删除成功');
+      } catch (err) {
+        console.error('删除失败', err);
+        alert('删除失败: ' + err.message);
+      }
     }
     
     init();
