@@ -53,12 +53,17 @@ def calculate_md5(file_path):
     return hash_md5.hexdigest()
 
 
-def run_cmd(cmd, desc="", max_retries=3):
+def run_cmd(cmd, desc="", max_retries=3, target_dir=None):
     print(f"\n{'='*50}")
     print(f"{desc}")
     print(f"{'='*50}")
 
     for attempt in range(max_retries):
+        try:
+            subprocess.run("taskkill /F /IM tdl.exe 2>nul", shell=True, capture_output=True)
+        except:
+            pass
+        
         process = subprocess.Popen(
             cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace"
@@ -70,28 +75,32 @@ def run_cmd(cmd, desc="", max_retries=3):
         start_time = time.time()
 
         download_count = 0
-        last_file = ""
         channel_name = ""
+        initial_count = 0
+        if target_dir and os.path.exists(target_dir):
+            initial_count = len([f for f in os.listdir(target_dir) if os.path.isfile(os.path.join(target_dir, f)) and is_image(f)])
 
         def read_output():
-            nonlocal download_count, last_file, channel_name
+            nonlocal download_count, channel_name
             try:
                 for line in process.stdout:
-                    if '%' in line and '->' in line:
-                        if '100%' in line or '100.0%' in line:
+                    if line.strip():
+                        output_lines.append(line)
+                        if '(' in line and ')' in line:
                             parts = line.split('(')
                             if len(parts) > 1:
-                                name_part = parts[1].split(')')[0] if ')' in parts[1] else ""
-                                if name_part and name_part != last_file:
-                                    last_file = name_part
-                                    download_count += 1
-                                    print(f"  📥 {channel_name}: {download_count} 张", end="\r", flush=True)
-                    elif '(' in line and ')' in line and ':' in line:
-                        parts = line.split('(')
-                        if len(parts) > 1:
-                            channel_name = parts[0].strip()
-            except Exception as e:
+                                channel_name = parts[0].strip()
+            except:
                 pass
+
+        def check_downloaded():
+            nonlocal download_count
+            if target_dir and os.path.exists(target_dir):
+                current_count = len([f for f in os.listdir(target_dir) if os.path.isfile(os.path.join(target_dir, f)) and is_image(f)])
+                new_count = current_count - initial_count
+                if new_count > download_count:
+                    download_count = new_count
+                    print(f"  {channel_name}: 第{download_count}张 done")
 
         thread = threading.Thread(target=read_output, daemon=True)
         thread.start()
@@ -99,12 +108,13 @@ def run_cmd(cmd, desc="", max_retries=3):
         last_output = 0
         last_output_time = time.time()
         timeout = 600
-        no_output_timeout = 30
+        no_output_timeout = 60
         stuck_count = 0
-        max_stuck = 3
+        max_stuck = 5
 
         while process.poll() is None:
-            time.sleep(0.5)
+            time.sleep(1)
+            check_downloaded()
             current_len = len(output_lines)
             if current_len > last_output:
                 last_output = current_len
@@ -112,7 +122,7 @@ def run_cmd(cmd, desc="", max_retries=3):
                 stuck_count = 0
             elif time.time() - last_output_time > no_output_timeout:
                 stuck_count += 1
-                print(f"\n\n{no_output_timeout}秒无输出，可能卡住 ({stuck_count}/{max_stuck})...")
+                print(f"\n{no_output_timeout}秒无输出，可能卡住 ({stuck_count}/{max_stuck})...")
                 try:
                     process.stdin.write("y\n")
                     process.stdin.flush()
@@ -125,7 +135,7 @@ def run_cmd(cmd, desc="", max_retries=3):
                     process.wait(5)
                     break
             elif time.time() - start_time > timeout:
-                print(f"\n\n总超时 ({timeout}秒)，终止命令")
+                print(f"\n总超时 ({timeout}秒)，终止命令")
                 process.terminate()
                 process.wait(5)
                 break
@@ -241,8 +251,8 @@ def filter_and_download(export_file, download_dir, channel):
     cached_files = set(os.listdir(target_dir)) if os.path.exists(target_dir) else set()
     print(f"目录已有 {len(cached_files)} 个文件")
 
-    cmd = f'"{TDL_PATH}" dl -f "{filtered_file}" -d "{target_dir}" --proxy {PROXY} --skip-same --restart'
-    run_cmd(cmd, f"下载 {channel} 的 {len(filtered)} 张图片到 {target_dir}")
+    cmd = f'"{TDL_PATH}" dl -f "{filtered_file}" -d "{target_dir}" --proxy {PROXY} --skip-same --continue'
+    run_cmd(cmd, f"下载 {channel} 的 {len(filtered)} 张图片到 {target_dir}", target_dir=target_dir)
 
     new_files = [f for f in os.listdir(target_dir) if os.path.isfile(os.path.join(target_dir, f)) and f not in cached_files]
     skipped = 0
