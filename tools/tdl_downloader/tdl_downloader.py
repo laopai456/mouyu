@@ -10,8 +10,8 @@ TDL_PATH = r"C:\tdl\tdl.exe"
 PROXY = "socks5://127.0.0.1:7897"
 
 CHANNELS = {
-    "woshadiao": 100    ,
-    "shadiao_refuse": 80,
+    "woshadiao": 150    ,
+    "shadiao_refuse": 150,
     "xinjingdaily": 200,
     "wtmsd": 160,
 }
