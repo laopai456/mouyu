@@ -478,4 +478,12 @@ Page({
     console.error('当前图片URL:', this.data.imageUrl);
     wx.showToast({ title: '图片加载失败', icon: 'none' });
   },
+
+  onShareAppMessage() {
+    return {
+      title: '木偶鱼 - 沙雕趣图',
+      path: '/pages/index/index',
+      imageUrl: this.data.imageUrl || ''
+    }
+  }
 });
