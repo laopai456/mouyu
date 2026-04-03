@@ -6,19 +6,14 @@ const db = cloud.database();
 const _ = db.command;
 
 const IMAGE_WINDOW_DAYS = 3;
-const MAX_SEEN_IDS = 50;
 
 exports.main = async (event, context) => {
   try {
     const count = event.count || 1;
     const maxCount = 5;
     const requestCount = Math.min(count, maxCount);
-    let seenIds = event.seenIds || [];
+    const seenIds = event.seenIds || [];
     const isFirstVisit = event.isFirstVisit === true;
-
-    if (seenIds.length > MAX_SEEN_IDS) {
-      seenIds = seenIds.slice(-MAX_SEEN_IDS);
-    }
 
     let query = db.collection('images').where({ status: 1 });
 
@@ -58,7 +53,12 @@ exports.main = async (event, context) => {
     }
 
     const shuffled = result.data.sort(() => Math.random() - 0.5);
-    const selected = shuffled.slice(0, requestCount);
+    const newImages = shuffled.filter(img => !seenIds.includes(img._id));
+    const selected = newImages.slice(0, requestCount);
+
+    if (selected.length === 0 && !isFirstVisit) {
+      return { success: false, message: '最近' + IMAGE_WINDOW_DAYS + '天没有新图片了', noMore: true };
+    }
 
     const fileIDs = selected.map(img => img.url).filter(url => url);
 

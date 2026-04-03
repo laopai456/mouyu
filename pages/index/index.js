@@ -205,6 +205,18 @@ Page({
     this.preloading = false;
   },
 
+  onScrollToUpper() {
+    const now = Date.now();
+    if (this.lastScrollToUpperTime && now - this.lastScrollToUpperTime < 1000) {
+      return;
+    }
+    this.lastScrollToUpperTime = now;
+
+    if (!this.data.isLoading && !this.data.noMoreImages) {
+      this.onRefresh();
+    }
+  },
+
   async onRefresh() {
     if (this.data.isLoading) {
       this.setData({ isRefreshing: false });
@@ -476,7 +488,12 @@ Page({
   onImageError(e) {
     console.error('图片加载失败', e);
     console.error('当前图片URL:', this.data.imageUrl);
-    wx.showToast({ title: '图片加载失败', icon: 'none' });
+
+    if (this.imageQueue.length > 0) {
+      this.showNextImage();
+    } else {
+      wx.showToast({ title: '图片加载失败', icon: 'none' });
+    }
   },
 
   onShareAppMessage() {

@@ -1,12 +1,14 @@
 <view class="container">
-  <scroll-view 
-    class="image-area" 
-    scroll-y 
-    enhanced 
+  <scroll-view
+    class="image-area"
+    scroll-y
+    enhanced
     show-scrollbar="{{false}}"
     refresher-enabled
     refresher-triggered="{{isRefreshing}}"
     bindrefresherrefresh="onRefresh"
+    bindscrolltoupper="onScrollToUpper"
+    upper-threshold="50"
   >
     <view class="image-wrapper">
       <block wx:if="{{noMoreImages}}">
@@ -15,12 +17,13 @@
         </view>
       </block>
       <block wx:else>
-        <image 
-          class="meme-image" 
-          src="{{imageUrl}}" 
-          mode="widthFix" 
+        <image
+          class="meme-image"
+          src="{{imageUrl}}"
+          mode="widthFix"
           binderror="onImageError"
           bindload="onImageLoad"
+          bindtap="onRefresh"
         />
       </block>
     </view>
