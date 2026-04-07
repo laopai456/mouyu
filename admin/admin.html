@@ -158,6 +158,64 @@
       text-align: center;
       padding: 20px;
     }
+
+    .image-grid-large {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 15px;
+      margin-top: 15px;
+    }
+    .grid-item-large {
+      position: relative;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #f0f0f0;
+    }
+    .grid-item-large img {
+      width: 100%;
+      aspect-ratio: 1;
+      object-fit: cover;
+      cursor: pointer;
+      display: block;
+    }
+    .checkbox-large {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      z-index: 2;
+    }
+    .checkbox-large input {
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+    }
+    .item-overlay {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 8px;
+      background: linear-gradient(transparent, rgba(0,0,0,0.7));
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: #fff;
+      font-size: 12px;
+    }
+    .btn-small {
+      padding: 4px 10px !important;
+      font-size: 12px !important;
+    }
+    .load-more {
+      text-align: center;
+      padding: 20px;
+      color: #667eea;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .load-more:hover {
+      background: #f5f5f5;
+    }
   </style>
 </head>
 <body>
@@ -281,6 +339,8 @@
     let currentYearMonth = null;
     let previewImages = [];
     let previewIndex = 0;
+    let pageState = { 0: { page: 0, hasMore: true }, 1: { page: 0, hasMore: true }, 2: { page: 0, hasMore: true } };
+    const PAGE_SIZE = 50;
     
     // 将 cloud:// URL 转换为 https:// URL
     function transformCloudUrl(cloudUrl) {
@@ -422,19 +482,40 @@
       }
     }
     
-    async function loadImages(status) {
+    async function loadImages(status, append = false) {
       const listId = ['pendingList', 'passedList', 'rejectedList'][status];
       const listEl = document.getElementById(listId);
-      listEl.innerHTML = '<div class="loading">加载中...</div>';
+
+      if (!append) {
+        pageState[status] = { page: 0, hasMore: true };
+        listEl.innerHTML = '<div class="loading">加载中...</div>';
+        previewImages = [];
+      } else {
+        const loadingEl = document.getElementById(`loading-more-${status}`);
+        if (loadingEl) loadingEl.textContent = '加载中...';
+      }
+
+      if (!pageState[status].hasMore && append) {
+        const loadingEl = document.getElementById(`loading-more-${status}`);
+        if (loadingEl) loadingEl.textContent = '没有更多了';
+        return;
+      }
 
       try {
+        const sortField = status === 0 ? 'createTime' : 'reviewTime';
+        const skip = pageState[status].page * PAGE_SIZE;
+        
         const res = await db.collection('images')
           .where({ status })
-          .orderBy('createTime', 'desc')
-          .limit(50)
+          .orderBy(sortField, 'desc')
+          .skip(skip)
+          .limit(PAGE_SIZE)
           .get();
 
-        if (res.data.length === 0) {
+        pageState[status].hasMore = res.data.length === PAGE_SIZE;
+        pageState[status].page++;
+
+        if (!append && res.data.length === 0) {
           listEl.innerHTML = '<div class="empty">暂无内容</div>';
           return;
         }
@@ -446,7 +527,6 @@
           try {
             console.log('获取临时 URL，文件数量:', fileIDs.length);
 
-            // 使用云函数获取临时 URL
             const tempUrlResult = await app.callFunction({
               name: 'getTempUrls',
               data: { fileIDs }
@@ -459,7 +539,6 @@
               console.log('URL 映射表:', urlMap);
             } else {
               console.error('云函数返回失败:', tempUrlResult.result);
-              // 如果云函数失败，尝试使用正则转换
               fileIDs.forEach(fileID => {
                 const httpsUrl = transformCloudUrl(fileID);
                 if (httpsUrl) {
@@ -469,7 +548,6 @@
             }
           } catch (err) {
             console.error('获取临时链接失败', err);
-            // 如果获取失败，尝试使用正则转换所有 URL
             fileIDs.forEach(fileID => {
               const httpsUrl = transformCloudUrl(fileID);
               if (httpsUrl) {
@@ -481,7 +559,7 @@
 
         console.log('最终 URL 映射表:', urlMap);
 
-        previewImages = res.data.map(item => ({
+        const newImages = res.data.map(item => ({
           id: item._id,
           url: urlMap[item.url] || item.url,
           status: status,
@@ -490,41 +568,95 @@
           createTime: item.createTime
         }));
         
-        listEl.innerHTML = `
-          <div class="batch-actions">
-            <label><input type="checkbox" onchange="toggleSelectAll(this, ${status})"> 全选</label>
-            ${status === 2 ? `
-              <button class="btn btn-warning" onclick="batchAddToBlacklist()">加入黑名单</button>
-            ` : ''}
-            <button class="btn btn-danger" onclick="batchDelete(${status})">批量删除</button>
-            <span class="selected-count" id="selectedCount-${status}">已选择 0 张</span>
-          </div>
-          <div class="image-grid">
-            ${res.data.map((item, index) => `
-              <div class="list-item" data-id="${item._id}" data-status="${status}">
-                <div class="checkbox">
-                  <input type="checkbox" class="image-checkbox" data-id="${item._id}" data-status="${status}" onchange="updateSelectedCount(${status})">
+        previewImages = previewImages.concat(newImages);
+        
+        if (!append) {
+          listEl.innerHTML = `
+            <div class="batch-actions">
+              <label><input type="checkbox" onchange="toggleSelectAll(this, ${status})"> 全选</label>
+              ${status === 2 ? `
+                <button class="btn btn-warning" onclick="batchAddToBlacklist()">加入黑名单</button>
+              ` : ''}
+              <button class="btn btn-danger" onclick="batchDelete(${status})">批量删除</button>
+              <span class="selected-count" id="selectedCount-${status}">已选择 0 张</span>
+            </div>
+            <div id="imageContainer-${status}"></div>
+            <div class="load-more" id="loading-more-${status}" onclick="loadMore(${status})">
+              ${pageState[status].hasMore ? '点击加载更多' : '没有更多了'}
+            </div>
+          `;
+        }
+
+        const containerEl = document.getElementById(`imageContainer-${status}`);
+        const startIndex = previewImages.length - newImages.length;
+
+        const html = status === 1 ? `
+          <div class="image-grid-large">
+            ${newImages.map((item, i) => `
+              <div class="grid-item-large" data-id="${item.id}">
+                <div class="checkbox-large">
+                  <input type="checkbox" class="image-checkbox" data-id="${item.id}" data-status="${status}" onchange="updateSelectedCount(${status})">
                 </div>
-                <img src="${urlMap[item.url] || item.url}" onclick="previewImage(${index}, ${status})" style="cursor:pointer">
+                <img src="${item.url}" onclick="previewImage(${startIndex + i}, ${status})">
+                <div class="item-overlay">
+                  <span>🌸 ${item.likeCount} | 💩 ${item.dislikeCount}</span>
+                  <button class="btn btn-danger btn-small" onclick="deleteImage('${item.id}', ${status})">删除</button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        ` : `
+          <div class="image-grid">
+            ${newImages.map((item, i) => `
+              <div class="list-item" data-id="${item.id}" data-status="${status}">
+                <div class="checkbox">
+                  <input type="checkbox" class="image-checkbox" data-id="${item.id}" data-status="${status}" onchange="updateSelectedCount(${status})">
+                </div>
+                <img src="${item.url}" onclick="previewImage(${startIndex + i}, ${status})" style="cursor:pointer">
                 <div class="info">
                   <div class="time">${formatTime(item.createTime)}</div>
-                  <div style="margin-top:5px;color:#666;font-size:12px">🌸 ${item.likeCount || 0} | 💩 ${item.dislikeCount || 0}</div>
+                  <div style="margin-top:5px;color:#666;font-size:12px">🌸 ${item.likeCount} | 💩 ${item.dislikeCount}</div>
                 </div>
                 ${status === 0 ? `
                   <div class="actions">
-                    <button class="btn btn-success" onclick="reviewImage('${item._id}', 1)">通过</button>
-                    <button class="btn btn-danger" onclick="reviewImage('${item._id}', 2)">拒绝</button>
+                    <button class="btn btn-success" onclick="reviewImage('${item.id}', 1)">通过</button>
+                    <button class="btn btn-danger" onclick="reviewImage('${item.id}', 2)">拒绝</button>
+                  </div>
+                ` : status === 2 ? `
+                  <div class="actions">
+                    <button class="btn btn-success" onclick="reviewImage('${item.id}', 1)">通过</button>
+                    <button class="btn btn-danger" onclick="deleteImage('${item.id}', ${status})">删除</button>
                   </div>
                 ` : `
-                  <button class="btn btn-danger" onclick="deleteImage('${item._id}', ${status})">删除</button>
+                  <button class="btn btn-danger" onclick="deleteImage('${item.id}', ${status})">删除</button>
                 `}
               </div>
             `).join('')}
           </div>
         `;
+
+        if (append) {
+          containerEl.insertAdjacentHTML('beforeend', html);
+        } else {
+          containerEl.innerHTML = html;
+        }
+
+        const loadingEl = document.getElementById(`loading-more-${status}`);
+        if (loadingEl) {
+          loadingEl.textContent = pageState[status].hasMore ? '点击加载更多' : '没有更多了';
+        }
+
       } catch (err) {
         console.error('加载图片失败', err);
-        listEl.innerHTML = '<div class="empty">加载失败</div>';
+        if (!append) {
+          listEl.innerHTML = '<div class="empty">加载失败</div>';
+        }
+      }
+    }
+
+    function loadMore(status) {
+      if (pageState[status].hasMore) {
+        loadImages(status, true);
       }
     }
 
