@@ -1049,7 +1049,7 @@
     async function startUpload() {
       if (selectedFiles.length === 0) return;
       
-      const btn = event.target;
+      const btn = document.querySelector('.upload-actions .btn-primary');
       btn.disabled = true;
       btn.textContent = '上传中...';
       
@@ -1092,27 +1092,33 @@
           const ext = file.name.split('.').pop() || 'jpg';
           const cloudPath = `memes/${yearMonth}/${Date.now()}_${Math.random().toString(36).substr(2, 9)}.${ext}`;
           
-          const uploadRes = await new Promise((resolve, reject) => {
-            app.uploadFile({
-              cloudPath,
-              filePath: file,
-              onUploadProgress: (progress) => {
-                const percent = Math.round(progress.loaded / progress.total * 100);
-                previewEl.querySelector('.status').textContent = `上传中 ${percent}%`;
-              },
-              success: (res) => resolve(res),
-              fail: (err) => reject(err)
-            });
+          const reader = new FileReader();
+          const base64 = await new Promise((resolve, reject) => {
+            reader.onload = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
           });
           
-          console.log('上传结果:', uploadRes);
+          const uploadRes = await app.callFunction({
+            name: 'uploadFile',
+            data: {
+              cloudPath,
+              fileContent: base64
+            }
+          });
+          
+          if (!uploadRes.result || !uploadRes.result.success) {
+            throw new Error(uploadRes.result?.message || '上传失败');
+          }
+          
+          console.log('上传结果:', uploadRes.result);
           
           previewEl.querySelector('.status')?.remove();
           previewEl.insertAdjacentHTML('beforeend', '<div class="status" style="background:#667eea">保存中...</div>');
           
           await db.collection('images').add({
-            fileID: uploadRes.fileID,
-            url: uploadRes.fileID,
+            fileID: uploadRes.result.fileID,
+            url: uploadRes.result.fileID,
             md5,
             uploaderOpenid: 'admin',
             status: 0,
@@ -1130,7 +1136,6 @@
           
         } catch (err) {
           console.error('上传失败', err);
-          console.error('错误详情:', err.message, err.stack);
           errors.push(`${file.name}: ${err.message}`);
           errorCount++;
           previewEl.querySelector('.status')?.remove();
@@ -1158,10 +1163,25 @@
       const preview = document.getElementById('qrcodePreview');
       
       try {
-        const res = await db.collection('qrcode').limit(1).get();
+        const res = await db.collection('qrcode').orderBy('createTime', 'desc').get();
+        console.log('qrcode查询结果:', res);
         
         if (res.data && res.data.length > 0) {
+          if (res.data.length > 1) {
+            console.log(`发现${res.data.length}条记录，清理旧记录...`);
+            const keepId = res.data[0]._id;
+            for (let i = 1; i < res.data.length; i++) {
+              try {
+                await db.collection('qrcode').doc(res.data[i]._id).remove();
+                console.log('已删除旧记录:', res.data[i]._id);
+              } catch (e) {
+                console.error('删除旧记录失败:', e);
+              }
+            }
+          }
+          
           const item = res.data[0];
+          console.log('qrcode数据:', item);
           
           const createTime = item.createTime || item.updateTime;
           const now = Date.now();
@@ -1174,15 +1194,37 @@
           }
           
           let imageUrl = item.url;
+          console.log('原始URL:', imageUrl);
           
           if (item.url && item.url.startsWith('cloud://')) {
-            const httpsUrl = transformCloudUrl(item.url);
-            if (httpsUrl) imageUrl = httpsUrl;
+            try {
+              console.log('调用getTempUrls云函数...');
+              const tempRes = await app.callFunction({
+                name: 'getTempUrls',
+                data: { fileIDs: [item.url] }
+              });
+              console.log('getTempUrls返回:', tempRes);
+              if (tempRes.result && tempRes.result.success && tempRes.result.urlMap[item.url]) {
+                imageUrl = tempRes.result.urlMap[item.url];
+                console.log('获取到的临时URL:', imageUrl);
+              } else {
+                console.log('getTempUrls失败，尝试transformCloudUrl');
+                const httpsUrl = transformCloudUrl(item.url);
+                if (httpsUrl) imageUrl = httpsUrl;
+              }
+            } catch (e) {
+              console.error('getTempUrls异常:', e);
+              const httpsUrl = transformCloudUrl(item.url);
+              if (httpsUrl) imageUrl = httpsUrl;
+            }
           }
+          
+          console.log('最终显示URL:', imageUrl);
           
           preview.innerHTML = `
             <div class="qrcode-display">
-              <img src="${imageUrl}" alt="社群二维码" style="max-width: 300px; max-height: 300px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+              <img src="${imageUrl}" alt="社群二维码" style="max-width: 300px; max-height: 300px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);" 
+                onerror="console.error('图片加载失败, URL:', this.src); this.parentElement.innerHTML='<div style=\\'color:red\\'>图片加载失败，请检查云函数是否部署</div>';">
               <div style="margin-top: 10px; color: #999; font-size: 12px;">剩余 ${Math.max(0, Math.ceil((sevenDays - (now - createTime)) / (24 * 60 * 60 * 1000)))} 天有效</div>
               <div style="margin-top: 15px;">
                 <button class="btn btn-primary" onclick="selectQRCode()">更换二维码</button>
@@ -1195,11 +1237,12 @@
         }
       } catch (err) {
         console.error('加载二维码失败', err);
-        preview.innerHTML = '<div class="empty">加载失败</div>';
+        preview.innerHTML = '<div class="empty">加载失败: ' + err.message + '</div>';
       }
     }
     
     function selectQRCode() {
+      alert('点击了上传按钮');
       document.getElementById('qrcodeInput').click();
     }
     
@@ -1210,25 +1253,31 @@
       const preview = document.getElementById('qrcodePreview');
       
       try {
-        const now = new Date();
-        const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-        const ext = file.name.split('.').pop() || 'jpg';
-        const cloudPath = `qrcode/qrcode_${Date.now()}.${ext}`;
+        preview.innerHTML = '<div class="loading">读取文件中...</div>';
+        
+        const reader = new FileReader();
+        const base64 = await new Promise((resolve, reject) => {
+          reader.onload = () => resolve(reader.result.split(',')[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
         
         preview.innerHTML = '<div class="loading">上传中...</div>';
         
-        const uploadRes = await new Promise((resolve, reject) => {
-          app.uploadFile({
+        const ext = file.name.split('.').pop() || 'jpg';
+        const cloudPath = `qrcode/qrcode_${Date.now()}.${ext}`;
+        
+        const result = await app.callFunction({
+          name: 'uploadFile',
+          data: {
             cloudPath,
-            filePath: file,
-            onUploadProgress: (progress) => {
-              const percent = Math.round(progress.loaded / progress.total * 100);
-              preview.innerHTML = `<div class="loading">上传中... ${percent}%</div>`;
-            },
-            success: (res) => resolve(res),
-            fail: (err) => reject(err)
-          });
+            fileContent: base64
+          }
         });
+        
+        if (!result.result || !result.result.success) {
+          throw new Error(result.result?.message || '上传失败');
+        }
         
         preview.innerHTML = '<div class="loading">保存中...</div>';
         
@@ -1236,12 +1285,12 @@
         
         if (existRes.data && existRes.data.length > 0) {
           await db.collection('qrcode').doc(existRes.data[0]._id).update({
-            url: uploadRes.fileID,
+            url: result.result.fileID,
             updateTime: Date.now()
           });
         } else {
           await db.collection('qrcode').add({
-            url: uploadRes.fileID,
+            url: result.result.fileID,
             createTime: Date.now()
           });
         }
@@ -1250,8 +1299,8 @@
         alert('二维码上传成功');
         
       } catch (err) {
-        console.error('上传失败', err);
-        preview.innerHTML = '<div class="empty" style="color:red">上传失败: ' + err.message + '</div>';
+        alert('上传失败: ' + (err.message || JSON.stringify(err)));
+        preview.innerHTML = '<div class="empty" style="color:red">上传失败</div>';
       }
       
       event.target.value = '';
