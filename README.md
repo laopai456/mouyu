@@ -105,7 +105,7 @@ mouyu/
 - `dislike_logs` - 踩记录表
 - `like_logs` - 送花记录表
 - `users` - 用户表
-- `qrcode` - 社群二维码表（url, createTime）
+- `qrcode` - 联系设置表（contact, url, createTime）
 
 ---
 
@@ -216,9 +216,9 @@ python uploader.py
 
 - 新增 uploadFile 云函数（绕过免费版云存储权限限制）
 - 管理后台批量上传改用云函数
-- 社群二维码上传改用云函数
-- 修复二维码显示问题（使用 getTempUrls 获取临时 URL）
-- 自动清理 qrcode 表中的旧记录
+- "社群二维码"改为"联系设置"（更安全过审）
+- 刷完图后显示"联系开发者"（可复制微信号/公众号）
+- 二维码改为可选功能
 
 ### v1.0.8 (2026-04-03)
 
