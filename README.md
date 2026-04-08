@@ -2,7 +2,7 @@
 
 > 微信小程序 | 沙雕趣图随机展示
 
-> 最后更新：2026-04-03
+> 最后更新：2026-04-08
 
 ---
 
@@ -13,7 +13,7 @@
 | 项目类型 | 微信小程序 |
 | 核心功能 | 随机展示梗图，用户上传，踩/送花/哈哈功能 |
 | 设计原则 | 极简、傻瓜化，开源 |
-| 当前版本 | v1.0.8 |
+| 当前版本 | v1.0.9 |
 
 ---
 
@@ -119,7 +119,8 @@ mouyu/
 | laughImage | 记录哈哈次数 |
 | addImage | 添加图片（检查MD5去重） |
 | admin | 管理员操作（审核、权限验证） |
-| getTempUrls | 获取临时URL |
+| getTempUrls | 获取云存储文件临时URL |
+| uploadFile | 云存储文件上传（绕过免费版权限限制） |
 | deleteImages | 批量删除图片 |
 | autoCleanup | 自动清理（满2000张删200张，优先删已拒绝） |
 | autoUpload | 自动上传工具支持 |
@@ -169,7 +170,7 @@ python uploader.py
 
 ## 部署步骤
 
-1. **部署云函数**：admin, getTempUrls, deleteImages, autoCleanup, autoUpload, getRandomImage, addImage, dislikeImage, likeImage, laughImage
+1. **部署云函数**：admin, getTempUrls, uploadFile, deleteImages, autoCleanup, autoUpload, getRandomImage, addImage, dislikeImage, likeImage, laughImage
 
 2. **配置云函数权限**：未登录用户可调用
 
@@ -210,6 +211,14 @@ python uploader.py
 ---
 
 ## 版本历史
+
+### v1.0.9 (2026-04-08)
+
+- 新增 uploadFile 云函数（绕过免费版云存储权限限制）
+- 管理后台批量上传改用云函数
+- 社群二维码上传改用云函数
+- 修复二维码显示问题（使用 getTempUrls 获取临时 URL）
+- 自动清理 qrcode 表中的旧记录
 
 ### v1.0.8 (2026-04-03)
 
