@@ -32,6 +32,8 @@ Page({
     laughMode: false,
     stageLight: false,
     hasVisitedBefore: false,
+    qrcodeUrl: '',
+    qrcodeDaysLeft: 0,
   },
 
   imageQueue: [],
@@ -80,6 +82,61 @@ Page({
     });
   },
 
+  fetchQRCode() {
+    const db = wx.cloud.database();
+    console.log('开始获取二维码...');
+    db.collection('qrcode').limit(1).get({
+      success: (res) => {
+        console.log('二维码查询结果:', res);
+        if (res.data && res.data.length > 0) {
+          const item = res.data[0];
+          console.log('二维码数据:', item);
+          const createTime = item.createTime || item.updateTime;
+          const now = Date.now();
+          const sevenDays = 7 * 24 * 60 * 60 * 1000;
+          
+          if (createTime && now - createTime <= sevenDays) {
+            const daysLeft = Math.max(0, Math.ceil((sevenDays - (now - createTime)) / (24 * 60 * 60 * 1000)));
+            console.log('二维码有效，剩余天数:', daysLeft, 'URL:', item.url);
+            
+            if (item.url && item.url.startsWith('cloud://')) {
+              console.log('调用 getTempFileURL...');
+              wx.cloud.getTempFileURL({
+                fileList: [item.url],
+                success: (tempRes) => {
+                  console.log('getTempFileURL 结果:', tempRes);
+                  if (tempRes.fileList && tempRes.fileList[0] && tempRes.fileList[0].tempFileURL) {
+                    console.log('临时URL:', tempRes.fileList[0].tempFileURL);
+                    this.setData({
+                      qrcodeUrl: tempRes.fileList[0].tempFileURL,
+                      qrcodeDaysLeft: daysLeft
+                    });
+                  }
+                },
+                fail: (err) => {
+                  console.error('getTempFileURL 失败:', err);
+                }
+              });
+            } else {
+              console.log('直接使用URL:', item.url);
+              this.setData({
+                qrcodeUrl: item.url,
+                qrcodeDaysLeft: daysLeft
+              });
+            }
+          } else {
+            console.log('二维码已过期');
+          }
+        } else {
+          console.log('没有二维码数据');
+        }
+      },
+      fail: (err) => {
+        console.error('查询二维码失败:', err);
+      }
+    });
+  },
+
   async initImages() {
     this.setData({ isLoading: true });
     try {
@@ -96,6 +153,7 @@ Page({
           noMoreImages: true,
           noMoreText: NO_MORE_TEXTS[dayOfWeek]
         });
+        this.fetchQRCode();
       }
     } catch (err) {
       console.error('初始化图片失败', err);
@@ -362,6 +420,9 @@ Page({
     if (this.adminTapTimes.length >= ADMIN_TAP_COUNT) {
       this.adminTapTimes = [];
       wx.navigateTo({ url: '/pages/admin/admin' });
+    } else if (this.adminTapTimes.length >= 3) {
+      this.setData({ noMoreImages: true, noMoreText: '测试模式' });
+      this.fetchQRCode();
     }
   },
 

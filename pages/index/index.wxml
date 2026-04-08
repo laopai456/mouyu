@@ -15,6 +15,12 @@
         <view class="no-more">
           <text class="no-more-text">{{noMoreText}}</text>
         </view>
+        <view class="qrcode-section" wx:if="{{qrcodeUrl}}">
+          <view class="qrcode-divider"></view>
+          <text class="qrcode-title">加入社群，一起快乐摸鱼</text>
+          <image class="qrcode-image" src="{{qrcodeUrl}}" mode="widthFix" show-menu-by-longpress></image>
+          <text class="qrcode-hint">长按识别二维码 · {{qrcodeDaysLeft}}天后过期</text>
+        </view>
       </block>
       <block wx:else>
         <image

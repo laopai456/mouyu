@@ -363,3 +363,38 @@ page {
   font-weight: 300;
   line-height: 1;
 }
+
+.qrcode-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40rpx;
+  margin-top: 20rpx;
+}
+
+.qrcode-divider {
+  width: 120rpx;
+  height: 4rpx;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 2rpx;
+  margin-bottom: 40rpx;
+}
+
+.qrcode-title {
+  font-size: 28rpx;
+  color: rgba(255, 255, 255, 0.9);
+  margin-bottom: 30rpx;
+  letter-spacing: 2rpx;
+}
+
+.qrcode-image {
+  width: 400rpx;
+  border-radius: 16rpx;
+  box-shadow: 0 8rpx 40rpx rgba(0, 0, 0, 0.3);
+}
+
+.qrcode-hint {
+  font-size: 22rpx;
+  color: rgba(255, 255, 255, 0.6);
+  margin-top: 20rpx;
+}
