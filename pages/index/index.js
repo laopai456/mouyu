@@ -4,6 +4,8 @@ const PRELOAD_COUNT = 3;
 const MIN_QUEUE_SIZE = 2;
 const ADMIN_TAP_COUNT = 5;
 const ADMIN_TAP_INTERVAL = 1000;
+const NO_MORE_TAP_COUNT = 3;
+const NO_MORE_TAP_INTERVAL = 1000;
 
 const NO_MORE_TEXTS = [
   '上会儿班吧，球球了。',
@@ -33,12 +35,14 @@ Page({
     stageLight: false,
     hasVisitedBefore: false,
     contactInfo: '',
+    isDebugMode: false,
   },
 
   imageQueue: [],
   preloading: false,
   seenIds: [],
   adminTapTimes: [],
+  noMoreTapTimes: [],
   flyingTextId: 0,
   laughCounts: {},
   laughTimer: null,
@@ -50,6 +54,15 @@ Page({
     const hasVisited = wx.getStorageSync('hasVisitedBefore') || false;
     this.seenIds = savedSeenIds;
     this.setData({ hasVisitedBefore: hasVisited });
+
+    try {
+      const accountInfo = wx.getAccountInfoSync();
+      const envVersion = accountInfo.miniProgram.envVersion || 'release';
+      const isDebugMode = envVersion !== 'release';
+      this.setData({ isDebugMode });
+    } catch (e) {
+      console.log('获取小程序版本失败', e);
+    }
 
     this.checkLikeStatus();
     this.checkUploadPermission();
@@ -382,14 +395,35 @@ Page({
 
   onTitleTap() {
     const now = Date.now();
+
+    if (this.data.isDebugMode) {
+      this.noMoreTapTimes.push(now);
+      this.noMoreTapTimes = this.noMoreTapTimes.filter(t => now - t < NO_MORE_TAP_INTERVAL);
+
+      if (this.noMoreTapTimes.length >= NO_MORE_TAP_COUNT) {
+        this.noMoreTapTimes = [];
+        this.showNoMorePage();
+        return;
+      }
+    }
+
     this.adminTapTimes.push(now);
-    
     this.adminTapTimes = this.adminTapTimes.filter(t => now - t < ADMIN_TAP_INTERVAL);
-    
+
     if (this.adminTapTimes.length >= ADMIN_TAP_COUNT) {
       this.adminTapTimes = [];
       wx.navigateTo({ url: '/pages/admin/admin' });
     }
+  },
+
+  showNoMorePage() {
+    const dayOfWeek = new Date().getDay();
+    this.setData({
+      noMoreImages: true,
+      noMoreText: NO_MORE_TEXTS[dayOfWeek]
+    });
+    this.fetchContact();
+    wx.showToast({ title: '开发版预览', icon: 'none' });
   },
 
   onLaugh() {
@@ -506,6 +540,41 @@ Page({
 
   goUpload() {
     wx.navigateTo({ url: '/pages/upload/upload' });
+  },
+
+  onDelete() {
+    if (!this.data.imageId) return;
+
+    wx.showModal({
+      title: '删除图片',
+      content: '确定删除这张图片吗？',
+      success: (res) => {
+        if (res.confirm) {
+          wx.cloud.callFunction({
+            name: 'deleteImages',
+            data: {
+              action: 'delete',
+              id: this.data.imageId
+            },
+            success: (res) => {
+              if (res.result && res.result.success) {
+                wx.showToast({ title: '已删除', icon: 'success' });
+                if (this.imageQueue.length > 0) {
+                  this.showNextImage();
+                } else {
+                  this.onRefresh();
+                }
+              } else {
+                wx.showToast({ title: '删除失败', icon: 'none' });
+              }
+            },
+            fail: () => {
+              wx.showToast({ title: '删除失败', icon: 'none' });
+            }
+          });
+        }
+      }
+    });
   },
 
   onImageLoad(e) {
