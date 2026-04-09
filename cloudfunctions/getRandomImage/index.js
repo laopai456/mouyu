@@ -15,16 +15,26 @@ exports.main = async (event, context) => {
     const seenIds = event.seenIds || [];
     const isFirstVisit = event.isFirstVisit === true;
 
-    let query = db.collection('images').where({ status: 1 });
+    const wxContext = cloud.getWXContext();
+    const envVersion = wxContext.envVersion || 'release';
+    const isDebugMode = envVersion !== 'release';
 
-    if (!isFirstVisit) {
-      const now = Date.now();
-      const windowMs = IMAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-      const windowStart = new Date(now - windowMs);
+    console.log('DEBUG: envVersion=', wxContext.envVersion, 'isDebugMode=', isDebugMode);
+
+    let query;
+    const now = Date.now();
+    const windowMs = IMAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    const windowStart = now - windowMs;
+
+    if (isDebugMode) {
+      query = db.collection('images').where({ status: 0 });
+    } else if (!isFirstVisit) {
       query = db.collection('images').where({
         status: 1,
-        createTime: _.gte(windowStart.getTime())
+        createTime: _.gte(windowStart)
       });
+    } else {
+      query = db.collection('images').where({ status: 1 });
     }
 
     if (seenIds.length > 0) {
@@ -36,7 +46,7 @@ exports.main = async (event, context) => {
     const totalResult = await query.count();
 
     if (totalResult.total === 0) {
-      if (!isFirstVisit) {
+      if (!isFirstVisit && !isDebugMode) {
         const allResult = await db.collection('images').where({ status: 1 }).count();
         if (allResult.total > 0) {
           return { success: false, message: '最近' + IMAGE_WINDOW_DAYS + '天没有新图片', noMore: true, windowExpired: true };
@@ -54,9 +64,14 @@ exports.main = async (event, context) => {
 
     const shuffled = result.data.sort(() => Math.random() - 0.5);
     const newImages = shuffled.filter(img => !seenIds.includes(img._id));
-    const selected = newImages.slice(0, requestCount);
 
-    if (selected.length === 0 && !isFirstVisit) {
+    const filteredImages = isDebugMode 
+      ? newImages 
+      : newImages.filter(img => img.status === 1);
+
+    const selected = filteredImages.slice(0, requestCount);
+
+    if (selected.length === 0 && !isFirstVisit && !isDebugMode) {
       return { success: false, message: '最近' + IMAGE_WINDOW_DAYS + '天没有新图片了', noMore: true };
     }
 
