@@ -1,4 +1,19 @@
 <view class="container">
+  <view class="debug-panel" wx:if="{{isDebugMode}}">
+    <view class="debug-row">
+      <text class="debug-label">待审核:</text>
+      <text class="debug-value pending">{{debugStats.pending}}</text>
+    </view>
+    <view class="debug-row">
+      <text class="debug-label">已通过:</text>
+      <text class="debug-value approved">{{debugStats.approved}}</text>
+    </view>
+    <view class="debug-row">
+      <text class="debug-label">未读:</text>
+      <text class="debug-value unseen">{{debugStats.unseen}}</text>
+    </view>
+  </view>
+
   <scroll-view
     class="image-area"
     scroll-y
@@ -15,14 +30,22 @@
         <view class="no-more">
           <text class="no-more-text">{{noMoreText}}</text>
         </view>
-        <view class="contact-section" wx:if="{{contactInfo}}">
+        <view class="contact-section" wx:if="{{adminContact || submitContact}}">
           <view class="contact-divider"></view>
-          <text class="contact-title">联系开发者</text>
-          <view class="contact-content">
-            <text class="contact-text">{{contactInfo}}</text>
-            <text class="contact-copy" bindtap="copyContact">复制</text>
+          <view class="contact-item" wx:if="{{adminContact}}">
+            <text class="contact-label">摸鱼群请加管理：</text>
+            <view class="contact-content">
+              <text class="contact-text">{{adminContact}}</text>
+              <text class="contact-copy" bindtap="copyAdminContact">复制</text>
+            </view>
           </view>
-          <text class="contact-hint">欢迎反馈建议、投稿合作</text>
+          <view class="contact-item" wx:if="{{submitContact}}">
+            <text class="contact-label">投稿请加运营：</text>
+            <view class="contact-content">
+              <text class="contact-text">{{submitContact}}</text>
+              <text class="contact-copy" bindtap="copySubmitContact">复制</text>
+            </view>
+          </view>
         </view>
       </block>
       <block wx:else>

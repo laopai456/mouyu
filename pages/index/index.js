@@ -35,7 +35,14 @@ Page({
     stageLight: false,
     hasVisitedBefore: false,
     contactInfo: '',
+    adminContact: '',
+    submitContact: '',
     isDebugMode: false,
+    debugStats: {
+      pending: 0,
+      approved: 0,
+      unseen: 0
+    },
   },
 
   imageQueue: [],
@@ -60,6 +67,9 @@ Page({
       const envVersion = accountInfo.miniProgram.envVersion || 'release';
       const isDebugMode = envVersion !== 'release';
       this.setData({ isDebugMode });
+      if (isDebugMode) {
+        this.fetchDebugStats();
+      }
     } catch (e) {
       console.log('获取小程序版本失败', e);
     }
@@ -67,6 +77,29 @@ Page({
     this.checkLikeStatus();
     this.checkUploadPermission();
     this.initImages();
+  },
+
+  fetchDebugStats() {
+    wx.cloud.callFunction({
+      name: 'admin',
+      data: { action: 'getStats' },
+      success: (res) => {
+        if (res.result && res.result.success) {
+          const stats = res.result.stats;
+          const unseen = Math.max(0, stats.approved - this.seenIds.length);
+          this.setData({
+            debugStats: {
+              pending: stats.pending,
+              approved: stats.approved,
+              unseen: unseen
+            }
+          });
+        }
+      },
+      fail: (err) => {
+        console.error('获取统计数据失败', err);
+      }
+    });
   },
 
   checkUploadPermission() {
@@ -100,18 +133,31 @@ Page({
       success: (res) => {
         if (res.data && res.data.length > 0) {
           const item = res.data[0];
-          if (item.contact) {
-            this.setData({ contactInfo: item.contact });
-          }
+          this.setData({
+            contactInfo: item.contact || '',
+            adminContact: item.adminContact || '',
+            submitContact: item.submitContact || ''
+          });
         }
       }
     });
   },
 
-  copyContact() {
-    if (this.data.contactInfo) {
+  copyAdminContact() {
+    if (this.data.adminContact) {
       wx.setClipboardData({
-        data: this.data.contactInfo,
+        data: this.data.adminContact,
+        success: () => {
+          wx.showToast({ title: '已复制', icon: 'success' });
+        }
+      });
+    }
+  },
+
+  copySubmitContact() {
+    if (this.data.submitContact) {
+      wx.setClipboardData({
+        data: this.data.submitContact,
         success: () => {
           wx.showToast({ title: '已复制', icon: 'success' });
         }
@@ -191,6 +237,12 @@ Page({
     const image = this.imageQueue.shift();
     this.seenIds.push(image._id);
     wx.setStorageSync('seenIds', this.seenIds);
+
+    if (this.data.isDebugMode && this.data.debugStats.unseen > 0) {
+      this.setData({
+        'debugStats.unseen': this.data.debugStats.unseen - 1
+      });
+    }
 
     if (!this.data.hasVisitedBefore) {
       wx.setStorageSync('hasVisitedBefore', true);

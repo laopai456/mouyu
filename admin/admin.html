@@ -317,13 +317,22 @@
           <h3 style="margin-bottom: 15px; color: #333;">联系设置</h3>
           <p style="color: #666; margin-bottom: 20px;">设置刷完图后显示的联系方式（微信号/公众号等）</p>
           
-          <div style="margin-bottom: 30px;">
-            <label style="display: block; margin-bottom: 10px; color: #333; font-weight: 500;">联系方式</label>
+          <div style="margin-bottom: 20px;">
+            <label style="display: block; margin-bottom: 10px; color: #333; font-weight: 500;">摸鱼群</label>
             <div style="display: flex; gap: 10px;">
-              <input type="text" id="contactInput" placeholder="例如：mouyu2024" style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;">
-              <button class="btn btn-primary" onclick="saveContact()">保存</button>
+              <input type="text" id="adminContactInput" placeholder="例如：admin_wx" style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;">
+              <button class="btn btn-primary" onclick="saveAdminContact()">保存</button>
             </div>
-            <p style="color: #999; font-size: 12px; margin-top: 8px;">用户刷完图后会看到"联系开发者"和此内容</p>
+            <p style="color: #999; font-size: 12px; margin-top: 8px;">摸鱼群请加管理</p>
+          </div>
+
+          <div style="margin-bottom: 30px;">
+            <label style="display: block; margin-bottom: 10px; color: #333; font-weight: 500;">投稿</label>
+            <div style="display: flex; gap: 10px;">
+              <input type="text" id="submitContactInput" placeholder="例如：submit_wx" style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;">
+              <button class="btn btn-primary" onclick="saveSubmitContact()">保存</button>
+            </div>
+            <p style="color: #999; font-size: 12px; margin-top: 8px;">投稿请加运营</p>
           </div>
           
           <div id="contactPreview" style="margin-bottom: 20px;"></div>
@@ -1169,15 +1178,14 @@
       
       selectedFiles = [];
       setTimeout(() => {
-        renderPreview();
-        loadStats();
-      }, 1000);
+          renderPreview();
+          loadStats();
+          loadQRCode();
+        }, 1000);
     }
     
     async function loadQRCode() {
       const preview = document.getElementById('qrcodePreview');
-      const contactInput = document.getElementById('contactInput');
-      const contactPreview = document.getElementById('contactPreview');
       
       try {
         const res = await db.collection('qrcode').orderBy('createTime', 'desc').get();
@@ -1199,9 +1207,12 @@
           const item = res.data[0];
           console.log('qrcode数据:', item);
           
-          if (item.contact) {
-            contactInput.value = item.contact;
-            contactPreview.innerHTML = `<div style="color: #52c41a; font-size: 14px;">✓ 当前联系方式: ${item.contact}</div>`;
+          if (item.adminContact) {
+            document.getElementById('adminContactInput').value = item.adminContact;
+          }
+          
+          if (item.submitContact) {
+            document.getElementById('submitContactInput').value = item.submitContact;
           }
           
           if (item.url) {
@@ -1344,26 +1355,48 @@
       }
     }
     
-    async function saveContact() {
-      const contactInput = document.getElementById('contactInput');
+    async function saveAdminContact() {
+      const contactInput = document.getElementById('adminContactInput');
       const contact = contactInput.value.trim();
-      
-      if (!contact) {
-        alert('请输入联系方式');
-        return;
-      }
       
       try {
         const existRes = await db.collection('qrcode').limit(1).get();
         
         if (existRes.data && existRes.data.length > 0) {
           await db.collection('qrcode').doc(existRes.data[0]._id).update({
-            contact: contact,
+            adminContact: contact,
             updateTime: Date.now()
           });
         } else {
           await db.collection('qrcode').add({
-            contact: contact,
+            adminContact: contact,
+            createTime: Date.now()
+          });
+        }
+        
+        loadContacts();
+        alert('保存成功');
+      } catch (err) {
+        console.error('保存失败', err);
+        alert('保存失败: ' + err.message);
+      }
+    }
+
+    async function saveSubmitContact() {
+      const contactInput = document.getElementById('submitContactInput');
+      const contact = contactInput.value.trim();
+      
+      try {
+        const existRes = await db.collection('qrcode').limit(1).get();
+        
+        if (existRes.data && existRes.data.length > 0) {
+          await db.collection('qrcode').doc(existRes.data[0]._id).update({
+            submitContact: contact,
+            updateTime: Date.now()
+          });
+        } else {
+          await db.collection('qrcode').add({
+            submitContact: contact,
             createTime: Date.now()
           });
         }

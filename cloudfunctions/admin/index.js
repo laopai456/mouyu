@@ -64,6 +64,22 @@ exports.main = async (event, context) => {
       return { success: true, count: res.total };
     }
 
+    if (action === 'getStats') {
+      const [pending, approved, rejected] = await Promise.all([
+        db.collection('images').where({ status: 0 }).count(),
+        db.collection('images').where({ status: 1 }).count(),
+        db.collection('images').where({ status: 2 }).count()
+      ]);
+      return {
+        success: true,
+        stats: {
+          pending: pending.total,
+          approved: approved.total,
+          rejected: rejected.total
+        }
+      };
+    }
+
     if (action === 'getList') {
       const s = status !== undefined ? status : 0;
       const res = await db.collection('images')

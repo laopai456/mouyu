@@ -19,33 +19,31 @@ exports.main = async (event, context) => {
     const envVersion = wxContext.envVersion || 'release';
     const isDebugMode = envVersion !== 'release';
 
-    console.log('DEBUG: envVersion=', wxContext.envVersion, 'isDebugMode=', isDebugMode);
+    console.log('DEBUG: envVersion=', wxContext.envVersion, 'isDebugMode=', isDebugMode, 'isFirstVisit=', isFirstVisit);
 
-    let query;
     const now = Date.now();
     const windowMs = IMAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
     const windowStart = now - windowMs;
 
+    console.log('DEBUG: windowStart=', windowStart, 'now=', now);
+
+    let allImages = [];
+
     if (isDebugMode) {
-      query = db.collection('images').where({ status: 0 });
+      const result = await db.collection('images').where({ status: 0 }).limit(100).get();
+      allImages = result.data;
+      console.log('DEBUG: debug mode, fetched', allImages.length, 'pending images');
     } else if (!isFirstVisit) {
-      query = db.collection('images').where({
-        status: 1,
-        createTime: _.gte(windowStart)
-      });
+      const result = await db.collection('images').where({ status: 1 }).limit(500).get();
+      allImages = result.data.filter(img => img.reviewTime && img.reviewTime >= windowStart);
+      console.log('DEBUG: non-first visit, fetched', result.data.length, 'approved, after reviewTime filter:', allImages.length);
     } else {
-      query = db.collection('images').where({ status: 1 });
+      const result = await db.collection('images').where({ status: 1 }).limit(500).get();
+      allImages = result.data;
+      console.log('DEBUG: first visit, fetched', allImages.length, 'approved images');
     }
 
-    if (seenIds.length > 0) {
-      query = query.where({
-        _id: _.nin(seenIds)
-      });
-    }
-
-    const totalResult = await query.count();
-
-    if (totalResult.total === 0) {
+    if (allImages.length === 0) {
       if (!isFirstVisit && !isDebugMode) {
         const allResult = await db.collection('images').where({ status: 1 }).count();
         if (allResult.total > 0) {
@@ -55,21 +53,11 @@ exports.main = async (event, context) => {
       return { success: false, message: '暂无图片', noMore: true };
     }
 
-    const sampleSize = Math.min(requestCount * 3, 15);
-    const result = await query.limit(sampleSize).get();
-
-    if (result.data.length === 0) {
-      return { success: false, message: '暂无新图片', noMore: true };
-    }
-
-    const shuffled = result.data.sort(() => Math.random() - 0.5);
+    const shuffled = allImages.sort(() => Math.random() - 0.5);
     const newImages = shuffled.filter(img => !seenIds.includes(img._id));
+    const selected = newImages.slice(0, requestCount);
 
-    const filteredImages = isDebugMode 
-      ? newImages 
-      : newImages.filter(img => img.status === 1);
-
-    const selected = filteredImages.slice(0, requestCount);
+    console.log('DEBUG: selected', selected.length, 'images');
 
     if (selected.length === 0 && !isFirstVisit && !isDebugMode) {
       return { success: false, message: '最近' + IMAGE_WINDOW_DAYS + '天没有新图片了', noMore: true };
