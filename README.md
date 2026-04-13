@@ -2,7 +2,7 @@
 
 > 微信小程序 | 沙雕趣图随机展示
 
-> 最后更新：2026-04-08
+> 最后更新：2026-04-10
 
 ---
 
@@ -13,7 +13,7 @@
 | 项目类型 | 微信小程序 |
 | 核心功能 | 随机展示梗图，用户上传，踩/送花/哈哈功能 |
 | 设计原则 | 极简、傻瓜化，开源 |
-| 当前版本 | v1.0.9 |
+| 当前版本 | v1.1.0 |
 
 ---
 
@@ -31,13 +31,14 @@ mouyu/
 │   └── project.config.json # 项目配置
 │
 ├── 🛠️ 工具目录（不上传）
-│   └── telegram-decrypter/  # Telegram 缓存解密
+│   ├── telegram-decrypter/  # Telegram 缓存解密
+│   ├── uploader/            # 自动上传工具
+│   └── tdl_downloader/      # Telegram 下载器
 │
 ├── 📄 文档
 │   ├── README.md           # 本文档
 │   ├── API.md             # 云函数接口文档
-│   ├── IMPROVEMENTS.md    # 项目改进建议
-│   └── REFACTOR_TRIGGER.md # 重构触发追踪
+│   └── .trae/rules/project_rules.md # 项目开发规范
 │
 └── 🔧 管理工具
     └── admin.html          # Web 管理后台
@@ -49,12 +50,13 @@ mouyu/
 
 | 功能 | 描述 |
 |------|------|
-| 随机展示 | 首页下拉刷新换图，已看图片不重复（限制50个seenIds） |
+| 随机展示 | 首页下拉刷新换图，已看图片不重复 |
 | 哈哈功能 | 😂 按钮，点击后屏幕飞过各种"哈哈"文字，有权重提升效果 |
 | 送花功能 | 🌸 按钮，每人每天1次 |
 | 踩功能 | 💩 按钮，每人每天3次，踩后自动换图 |
 | 上传入口 | 点击右上角+上传图片，每天最多9张 |
 | 审核机制 | 图片上传后需管理员审核才展示 |
+| 开发版调试 | 开发版显示待审核/已通过/未读数量 |
 
 ### 哈哈权重系统
 
@@ -62,10 +64,11 @@ mouyu/
 - laughCount 越高的图片，被优先展示的概率越大
 - 算法：每个图片权重 = `laughCount + 1`
 
-### 首次访问规则
+### 图片展示规则
 
-- 首次访问：可看到所有已通过图片
-- 后续访问：只展示最近3天内上传的图片
+- **首次访问**：可看到所有已通过图片
+- **后续访问**：只展示最近3天内**审核通过**的图片（按 reviewTime 判断）
+- **开发版**：显示待审核图片，左上角显示调试面板
 
 ---
 
@@ -99,13 +102,22 @@ mouyu/
 | date | string | 上传日期 YYYY-MM-DD |
 | yearMonth | string | 年月 YYYY-MM |
 | createTime | number | 创建时间戳 |
+| reviewTime | number | 审核时间戳 |
+
+### qrcode（联系方式表）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| adminContact | string | 摸鱼群管理联系方式 |
+| submitContact | string | 投稿运营联系方式 |
+| url | string | 二维码图片地址（可选） |
 
 ### 其他表
 
 - `dislike_logs` - 踩记录表
 - `like_logs` - 送花记录表
 - `users` - 用户表
-- `qrcode` - 联系设置表（contact, url, createTime）
+- `md5_blacklist` - MD5黑名单表
 
 ---
 
@@ -113,12 +125,12 @@ mouyu/
 
 | 云函数 | 功能 |
 |--------|------|
-| getRandomImage | 获取随机图片（加权随机，限制seenIds=50） |
+| getRandomImage | 获取随机图片（内存过滤status，按reviewTime判断时间窗口） |
 | dislikeImage | 踩图片 |
 | likeImage | 送花 |
 | laughImage | 记录哈哈次数 |
 | addImage | 添加图片（检查MD5去重） |
-| admin | 管理员操作（审核、权限验证） |
+| admin | 管理员操作（审核、权限验证、统计数据） |
 | getTempUrls | 获取云存储文件临时URL |
 | uploadFile | 云存储文件上传（绕过免费版权限限制） |
 | deleteImages | 批量删除图片 |
@@ -149,6 +161,7 @@ python -m http.server 9000
 - 批量删除
 - 数据统计
 - 图片预览（左右切换、键盘快捷键）
+- 联系方式设置（摸鱼群管理、投稿运营）
 
 ---
 
@@ -161,10 +174,6 @@ python uploader.py
 ```
 
 **图片压缩**：PNG/BMP/WebP/TIFF 自动转 JPEG（节省 50-80% 体积）
-
----
-
-## Telegram 缓存解密 (telegram-decrypter)
 
 ---
 
@@ -193,24 +202,34 @@ python uploader.py
 
 ## 维护规范
 
-### REFACTOR_TRIGGER.md
+### .trae/rules/project_rules.md
 
-用于追踪需要重构的改动，满足条件时触发：
-
-| 任务 | 触发条件 |
-|------|---------|
-| 配置集中化 | IMAGE_LIMIT/IMAGE_WINDOW_DAYS 被修改超过3次 |
-| uploader.py 拆分 | 文件超过 400 行 |
+项目开发规范，包含：
+- 图片审核状态规则
+- 代码评审 Checklist
+- 上线回归测试用例
+- 历史问题记录
 
 ### 更新规则
 
 - 每次功能改动**完成后**，检查是否需要更新 README
-- 重构完成后，更新 REFACTOR_TRIGGER.md 记录
 - 如果有功能改动但在当前对话中未完成，**不提醒**
 
 ---
 
 ## 版本历史
+
+### v1.1.0 (2026-04-10)
+
+**重要修复**：
+- 修复正式版用户看到待审核图片的问题
+- 云数据库 where() 链式调用 bug 规避（改用内存过滤）
+- 时间窗口判断从 createTime 改为 reviewTime
+
+**新增功能**：
+- 开发版调试面板（显示待审核/已通过/未读数量）
+- 联系方式拆分为两个独立字段（摸鱼群管理、投稿运营）
+- 开发版删除按钮（当场删除不合适图片）
 
 ### v1.0.9 (2026-04-08)
 
@@ -251,11 +270,33 @@ python uploader.py
 
 ---
 
+## 已知问题
+
+### 云数据库 where() 链式调用 bug
+
+**问题描述**：当同时使用多个 `where()` 条件时，某些条件可能被忽略。
+
+**示例**：
+```javascript
+// 错误：status 条件可能被忽略
+db.collection('images').where({ status: 1 }).where({ reviewTime: _.gte(time) })
+
+// 正确：在内存中过滤
+const result = await db.collection('images').where({ status: 1 }).get();
+const filtered = result.data.filter(img => img.reviewTime >= time);
+```
+
+**解决方案**：在 getRandomImage 云函数中，先查询 `status: 1`，然后在内存中过滤 `reviewTime`。
+
+---
+
 ## 外部依赖
 
 | 工具 | 用途 |
 |------|------|
 | telegram-decrypter | Telegram 缓存解密 |
+| tdl_downloader | Telegram 频道图片下载 |
+| uploader | 自动上传工具 |
 
 ---
 
