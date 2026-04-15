@@ -10,7 +10,8 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; min-height: 100vh; }
-    .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 20px; transition: max-width 0.3s; }
+    .container.full-width { max-width: 100%; padding: 20px 12px; }
     
     .header { background: #fff; padding: 20px; border-radius: 12px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
     .header h1 { font-size: 20px; color: #333; }
@@ -166,6 +167,32 @@
       display: flex;
       gap: 8px;
     }
+    .grid-dropdown {
+      position: relative;
+    }
+    .grid-dropdown-menu {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 4px;
+      background: #fff;
+      border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      overflow: hidden;
+      z-index: 100;
+      min-width: 140px;
+    }
+    .grid-dropdown-menu div {
+      padding: 10px 16px;
+      cursor: pointer;
+      font-size: 13px;
+      color: #333;
+      white-space: nowrap;
+    }
+    .grid-dropdown-menu div:hover {
+      background: #f0f0ff;
+      color: #667eea;
+    }
     .btn-sm {
       padding: 6px 12px;
       font-size: 12px;
@@ -174,20 +201,18 @@
     .batch-review-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
-      gap: 12px;
+      gap: 8px;
       margin-bottom: 20px;
     }
     .batch-review-item {
       position: relative;
       border-radius: 8px;
       overflow: hidden;
-      background: #f0f0f0;
-      aspect-ratio: 1;
+      background: #222;
     }
     .batch-review-item img {
       width: 100%;
-      height: 100%;
-      object-fit: cover;
+      display: block;
       cursor: pointer;
     }
     .batch-review-checkbox {
@@ -373,7 +398,13 @@
             <h3>待审核图片 <span id="pendingCountBadge"></span></h3>
             <div class="mode-switch">
               <button class="btn btn-sm" id="listModeBtn" onclick="switchReviewMode('list')">列表模式</button>
-              <button class="btn btn-sm btn-primary" id="gridModeBtn" onclick="switchReviewMode('grid')">网格审核</button>
+              <div class="grid-dropdown">
+                <button class="btn btn-sm" id="gridModeBtn" onclick="toggleGridDropdown()">网格审核 ▾</button>
+                <div class="grid-dropdown-menu hidden" id="gridDropdownMenu">
+                  <div onclick="switchReviewMode('grid', 4)">四宫格 (4张)</div>
+                  <div onclick="switchReviewMode('grid', 8)">八宫格 (8张)</div>
+                </div>
+              </div>
             </div>
           </div>
           
@@ -384,8 +415,8 @@
           <div id="pendingGridContainer" class="hidden">
             <div class="batch-review-grid" id="batchReviewGrid"></div>
             <div class="batch-review-actions">
-              <button class="btn btn-danger" onclick="batchRejectUnchecked()">一键拒绝未勾选</button>
-              <button class="btn btn-success" onclick="batchApproveChecked()">勾选通过，未勾选拒绝</button>
+              <button class="btn btn-danger" onclick="batchRejectUnchecked()">一键删除未勾选</button>
+              <button class="btn btn-success" onclick="batchApproveChecked()">勾选通过，未勾选删除</button>
             </div>
           </div>
         </div>
@@ -460,8 +491,21 @@
     const PAGE_SIZE = 50;
     
     let reviewMode = 'list';
+    let gridSize = 8;
     let batchImages = [];
     let selectedMap = new Map();
+    
+    function toggleGridDropdown() {
+      const menu = document.getElementById('gridDropdownMenu');
+      menu.classList.toggle('hidden');
+    }
+    
+    document.addEventListener('click', (e) => {
+      const dropdown = document.querySelector('.grid-dropdown');
+      if (dropdown && !dropdown.contains(e.target)) {
+        document.getElementById('gridDropdownMenu').classList.add('hidden');
+      }
+    });
     
     // 将 cloud:// URL 转换为 https:// URL
     function transformCloudUrl(cloudUrl) {
@@ -603,23 +647,30 @@
       }
     }
     
-    function switchReviewMode(mode) {
+    function switchReviewMode(mode, size) {
       reviewMode = mode;
+      gridSize = size || gridSize;
+      document.getElementById('gridDropdownMenu').classList.add('hidden');
       const listBtn = document.getElementById('listModeBtn');
       const gridBtn = document.getElementById('gridModeBtn');
       const listContainer = document.getElementById('pendingListContainer');
       const gridContainer = document.getElementById('pendingGridContainer');
+      
+      const container = document.querySelector('.container');
       
       if (mode === 'list') {
         listBtn.classList.add('btn-primary');
         gridBtn.classList.remove('btn-primary');
         listContainer.classList.remove('hidden');
         gridContainer.classList.add('hidden');
+        container.classList.remove('full-width');
       } else {
         listBtn.classList.remove('btn-primary');
         gridBtn.classList.add('btn-primary');
+        gridBtn.textContent = (gridSize === 4 ? '四' : '八') + '宫格审核 ▾';
         listContainer.classList.add('hidden');
         gridContainer.classList.remove('hidden');
+        container.classList.add('full-width');
         loadBatchImages();
       }
     }
@@ -627,18 +678,45 @@
     async function loadBatchImages() {
       const grid = document.getElementById('batchReviewGrid');
       grid.innerHTML = '<div class="loading">加载中...</div>';
+      grid.style.gridTemplateColumns = 'repeat(4, 1fr)';
       
       try {
         const res = await db.collection('images')
           .where({ status: 0 })
           .orderBy('createTime', 'desc')
-          .limit(8)
+          .limit(gridSize)
           .get();
         
         batchImages = res.data || [];
         selectedMap.clear();
         batchImages.forEach(img => selectedMap.set(img._id, false));
-        
+        console.log('网格审核加载图片:', batchImages.length, batchImages.map(img => img.url));
+
+        if (batchImages.length > 0) {
+          const fileIDs = batchImages.map(img => img.url).filter(url => url);
+          let urlMap = {};
+          try {
+            const tempUrlResult = await app.callFunction({
+              name: 'getTempUrls',
+              data: { fileIDs }
+            });
+            console.log('网格审核getTempUrls返回:', tempUrlResult);
+            if (tempUrlResult.result && tempUrlResult.result.success) {
+              urlMap = tempUrlResult.result.urlMap;
+            }
+          } catch (e) {
+            console.error('获取临时URL失败', e);
+          }
+          console.log('网格审核urlMap:', urlMap);
+          batchImages.forEach(img => {
+            if (urlMap[img.url]) {
+              img._displayUrl = urlMap[img.url];
+            } else {
+              img._displayUrl = transformCloudUrl(img.url) || img.url;
+            }
+          });
+        }
+
         renderBatchGrid();
         
         document.getElementById('pendingCountBadge').textContent = `(${batchImages.length}张)`;
@@ -657,15 +735,16 @@
       }
       
       grid.innerHTML = batchImages.map(img => {
-        const url = transformCloudUrl(img.url) || img.url;
+        const url = img._displayUrl || transformCloudUrl(img.url) || img.url;
         const isChecked = selectedMap.get(img._id);
         return `
           <div class="batch-review-item">
             <div class="batch-review-checkbox ${isChecked ? 'checked' : ''}" onclick="toggleCheckbox('${img._id}')"></div>
-            <img src="${url}" onclick="openPreview('${img._id}')" loading="lazy">
+            <img src="${url}" onclick="openPreview('${img._id}')" onerror="console.error('网格图片加载失败:', this.src)" style="background:#eee;">
           </div>
         `;
       }).join('');
+      console.log('网格审核图片渲染:', batchImages.map(img => ({ id: img._id, url: img.url, displayUrl: img._displayUrl })));
     }
     
     function toggleCheckbox(imageId) {
@@ -679,21 +758,17 @@
         .filter(img => !selectedMap.get(img._id))
         .map(img => img._id);
       
-      if (uncheckedIds.length === 0) {
-        alert('没有未勾选的图片');
-        return;
-      }
-      
-      if (!confirm(`确定拒绝 ${uncheckedIds.length} 张未勾选的图片？`)) return;
+      if (uncheckedIds.length === 0) return;
       
       try {
-        await Promise.all(uncheckedIds.map(id => reviewImage(id, 2)));
-        alert(`已拒绝 ${uncheckedIds.length} 张图片`);
+        await app.callFunction({
+          name: 'deleteImages',
+          data: { action: 'batchDelete', imageIds: uncheckedIds }
+        });
         loadBatchImages();
         loadStats();
       } catch (err) {
-        console.error('批量拒绝失败', err);
-        alert('操作失败: ' + err.message);
+        console.error('批量删除失败', err);
       }
     }
     
@@ -705,28 +780,22 @@
         .filter(img => !selectedMap.get(img._id))
         .map(img => img._id);
       
-      if (checkedIds.length === 0 && uncheckedIds.length === 0) {
-        alert('没有图片需要处理');
-        return;
-      }
-      
-      const msg = [];
-      if (checkedIds.length > 0) msg.push(`通过 ${checkedIds.length} 张`);
-      if (uncheckedIds.length > 0) msg.push(`拒绝 ${uncheckedIds.length} 张`);
-      
-      if (!confirm(`确定${msg.join('，')}？`)) return;
+      if (checkedIds.length === 0 && uncheckedIds.length === 0) return;
       
       try {
         const promises = [];
         checkedIds.forEach(id => promises.push(reviewImage(id, 1)));
-        uncheckedIds.forEach(id => promises.push(reviewImage(id, 2)));
+        if (uncheckedIds.length > 0) {
+          promises.push(app.callFunction({
+            name: 'deleteImages',
+            data: { action: 'batchDelete', imageIds: uncheckedIds }
+          }));
+        }
         await Promise.all(promises);
-        alert('操作完成');
         loadBatchImages();
         loadStats();
       } catch (err) {
         console.error('批量操作失败', err);
-        alert('操作失败: ' + err.message);
       }
     }
     
@@ -932,8 +1001,6 @@
     }
     
     async function deleteImage(imageId, status) {
-      if (!confirm('确定要删除这张图片吗？')) return;
-      
       try {
         const result = await app.callFunction({
           name: 'deleteImages',
@@ -946,24 +1013,15 @@
         if (result.result && result.result.success) {
           loadImages(status);
           loadStats();
-          alert('删除成功');
-        } else {
-          alert('删除失败：' + (result.result?.message || '未知错误'));
         }
       } catch (err) {
         console.error('删除失败', err);
-        alert('删除失败：' + err.message);
       }
     }
     
     async function batchDelete(status) {
       const checkboxes = document.querySelectorAll(`.image-checkbox[data-status="${status}"]:checked`);
-      if (checkboxes.length === 0) {
-        alert('请先选择要删除的图片');
-        return;
-      }
-      
-      if (!confirm(`确定要删除选中的 ${checkboxes.length} 张图片吗？`)) return;
+      if (checkboxes.length === 0) return;
       
       const ids = Array.from(checkboxes).map(cb => cb.dataset.id);
       
@@ -977,21 +1035,15 @@
         });
         
         if (result.result && result.result.success) {
-          alert(`删除完成\n成功: ${result.result.successCount}\n失败: ${result.result.failCount}`);
           loadImages(status);
           loadStats();
-        } else {
-          alert('删除失败：' + (result.result?.message || '未知错误'));
         }
       } catch (err) {
         console.error('批量删除失败', err);
-        alert('删除失败：' + err.message);
       }
     }
 
     async function batchAddToBlacklist() {
-      if (!confirm(`确定要将已拒绝图片的MD5加入黑名单吗？\n下次上传同样图片会被拦截`)) return;
-
       try {
         const result = await app.callFunction({
           name: 'deleteImages',
@@ -1001,15 +1053,11 @@
         });
 
         if (result.result && result.result.success) {
-          alert(result.result.message);
           loadImages(2);
           loadStats();
-        } else {
-          alert('操作失败：' + (result.result?.message || '未知错误'));
         }
       } catch (err) {
         console.error('操作失败', err);
-        alert('操作失败：' + err.message);
       }
     }
 
@@ -1027,7 +1075,7 @@
         loadImages(0);
         loadStats();
       } catch (err) {
-        alert('操作失败：' + err.message);
+        console.error('审核操作失败', err);
       }
     }
     
@@ -1101,15 +1149,13 @@
           loadStats();
         }
       } catch (err) {
-        alert('操作失败：' + err.message);
+        console.error('操作失败', err);
       }
     }
     
     async function deleteFromPreview() {
       const current = previewImages[previewIndex];
       if (!current) return;
-      
-      if (!confirm('确定要删除这张图片吗？')) return;
       
       try {
         const result = await app.callFunction({
@@ -1135,12 +1181,9 @@
             loadImages(current.status);
             loadStats();
           }
-        } else {
-          alert('删除失败：' + (result.result?.message || '未知错误'));
         }
       } catch (err) {
         console.error('删除失败', err);
-        alert('删除失败：' + err.message);
       }
     }
     
@@ -1511,7 +1554,6 @@
     }
     
     function selectQRCode() {
-      alert('点击了上传按钮');
       document.getElementById('qrcodeInput').click();
     }
     
@@ -1565,10 +1607,9 @@
         }
         
         loadQRCode();
-        alert('二维码上传成功');
         
       } catch (err) {
-        alert('上传失败: ' + (err.message || JSON.stringify(err)));
+        console.error('二维码上传失败', err);
         preview.innerHTML = '<div class="empty" style="color:red">上传失败</div>';
       }
       
@@ -1576,15 +1617,11 @@
     }
     
     async function deleteQRCode(id) {
-      if (!confirm('确定要删除二维码吗？')) return;
-      
       try {
         await db.collection('qrcode').doc(id).update({ url: '' });
         loadQRCode();
-        alert('删除成功');
       } catch (err) {
         console.error('删除失败', err);
-        alert('删除失败: ' + err.message);
       }
     }
     
@@ -1608,10 +1645,8 @@
         }
         
         loadContacts();
-        alert('保存成功');
       } catch (err) {
         console.error('保存失败', err);
-        alert('保存失败: ' + err.message);
       }
     }
 
@@ -1635,10 +1670,8 @@
         }
         
         loadQRCode();
-        alert('保存成功');
       } catch (err) {
         console.error('保存失败', err);
-        alert('保存失败: ' + err.message);
       }
     }
     
