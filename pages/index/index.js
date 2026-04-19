@@ -177,6 +177,7 @@ Page({
       } else {
         console.log('没有获取到图片');
         const dayOfWeek = new Date().getDay();
+        this._noMoreTimestamp = Date.now();
         this.setData({
           noMoreImages: true,
           noMoreText: NO_MORE_TEXTS[dayOfWeek]
@@ -214,6 +215,7 @@ Page({
           } else {
             if (res.result && res.result.noMore) {
               const dayOfWeek = new Date().getDay();
+              this._noMoreTimestamp = Date.now();
               this.setData({ noMoreImages: true, noMoreText: NO_MORE_TEXTS[dayOfWeek] });
               resolve([]);
             } else {
@@ -316,8 +318,11 @@ Page({
     }
 
     if (this.data.noMoreImages) {
-      this.setData({ isRefreshing: false });
-      return;
+      if (this._noMoreTimestamp && Date.now() - this._noMoreTimestamp < 5 * 60 * 1000) {
+        this.setData({ isRefreshing: false });
+        return;
+      }
+      this.setData({ noMoreImages: false });
     }
 
     if (this.imageQueue.length > 0) {

@@ -1,90 +1,144 @@
-# 项目开发规范
+# 项目规则
 
-## 图片审核状态规则
+## Git 提交
+- 每次代码修改完成后，自动执行 `git add` + `git commit`，无需用户确认。
+- commit message 使用中文，格式：`type(scope): 描述`。
 
-### 状态定义
-```javascript
-const IMAGE_STATUS = {
-  PENDING: 0,   // 待审核
-  APPROVED: 1,  // 已通过
-  REJECTED: 2   // 已拒绝
-};
+## 数据安全（血的教训）
+- **永远不要在服务器上执行 `git checkout -- data.json`**，会丢失抓取数据
+- 服务器上操作 data.json 前，必须先备份：`cp data.json data.json.bak`
+- `data.json` 已加入 `.gitignore`，不要重新 track 它
+- 涉及服务器 git pull 时，用 `git stash` 而非 `git checkout` 处理冲突
+
+## 功能修改必须全局同步
+- 改前端显示列表（如去掉某个标签），必须同步修改所有相关位置：
+  - 前端 GENRE_LIST
+  - 抓取脚本 GENRE_TAGS
+  - 去重脚本 GENRE_TAGS
+  - server.js / 云函数中的硬编码列表
+- 改完一个文件后，grep 检查所有相关引用是否同步更新
+
+## 服务器操作规范
+- 长时间运行的抓取脚本用 `nohup` + 后台执行
+- 跑脚本前先确认服务器代码是最新版（git pull）
+- 不要从服务器 push 到 GitHub，只从本地 push，服务器只 pull
+- 服务器部署变更顺序：`git pull → 跑抓取脚本 → pm2 restart movie-api`，三步缺一不可
+
+## 计划/规格文档规范
+- 写入 `docs/superpowers/plans/` 或 `docs/superpowers/specs/`
+- 必须自包含：新会话的 AI 无需读取任何其他文件即可理解并执行
+- 必须包含以下章节：
+  - **项目上下文**：项目结构、数据模型、关键文件路径、设计风格、Git 规范
+  - **文件结构**：列出所有要创建/修改的文件及其职责
+  - **任务分解**：每个步骤包含完整代码，禁止占位符（TODO/TBD/待定）
+  - **自检清单**：规格覆盖度、占位符扫描、类型一致性
+- 引用文件时用绝对路径，引用代码时标注行号范围
+
+## 功能验收规范
+- 所有前端（miniprogram）功能实现完成后，**必须主动提供验收步骤**，不要等用户问
+- 验收步骤格式：
+  1. **编译预览**：微信开发者工具中编译，确认无报错
+  2. **核心流程**：列出需要手动操作验证的关键路径（如：打开X页 → 点击Y → 期望看到Z）
+  3. **边界情况**：空列表、网络断开、数据异常等场景的检查点
+  4. **回归检查**：确认改动不影响已有功能（如：其他页面的列表渲染、详情页打开等）
+- 如果功能涉及本地存储（wx.setStorageSync），验收步骤中应包含「清除缓存后重试」
+- 后端/脚本功能完成后，提供对应的运行命令和预期输出
+
+## 代码自查规范
+- 功能实现完成后，**必须主动做代码审查复盘**，不要等用户提醒
+- 审查范围：
+  1. **所有数据路径全覆盖**：检查每一条可能设置列表数据的代码路径（如缓存命中/未命中、预加载/直接加载），确保过滤/处理逻辑一致
+  2. **新增字段全链路检查（重点）**：新增数据字段时，必须 grep 所有构造对象的位置，逐一确认新字段已加入。数据链路：`抓取脚本 → data.json → server.js → 云函数 → 前端（fetchXxx/loadXxx/applyTabData/缓存路径）`，每一层都要验证字段存在
+  3. **存储写入异常捕获**：所有 `wx.setStorageSync` 调用必须包裹 try-catch（微信小程序 storage 上限 10MB）
+  4. **wx:key 一致性**：列表渲染的 `wx:key` 必须使用实际存在的唯一字段，不能留无效 key
+  5. **边界场景**：空数据、重复操作、并发操作是否安全
+- 审查结果输出格式：
+  - ✅ 已修复：列出问题 + 修复内容 + 严重度
+  - ℹ️ 已知但不影响：列出问题 + 不处理的原因
+- 审查后如有修复，需告知用户哪些需要重新验收、哪些不需要
+
+## 小程序上传代码备注
+- 微信开发者工具中上传代码：工具栏 → 「上传」按钮 → 填写版本号和备注 → 上传
+- 上传后在微信公众平台（mp.weixin.qq.com）→ 版本管理中可看到开发版本
+- 开发版本可设为体验版（扫码体验）或提交审核
+- 注意：上传前确认 `project.config.json` 中的 appid 正确
+- 云函数修改需要单独上传：右键云函数目录 → 「上传并部署：云端安装依赖」
+
+---
+
+## 反复出错复盘与防范规则
+
+> 以下规则来源于实际开发中反复出现的错误，每次验收后如发现同类问题，必须补充到此章节。
+
+### 错误 1：新增字段漏加消费端（已发生 4 次）
+
+**现象**：在抓取脚本中新增字段（如 `airMonth`），但前端/中间层没有同步添加，导致功能失效。
+
+**根因**：数据从抓取到展示经过多层转换，每层都重新构造对象（逐字段赋值而非展开），新字段被丢弃。
+
+**涉及的层级**：
+```
+fetch_variety.js (写入 data.json)
+  → server.js formatItem() (构造返回对象)
+    → 前端 fetchVarietyAll() (构造前端对象)
+      → 前端 loadVariety() (构造前端对象)
+        → 前端 applyTabData() (缓存路径)
 ```
 
-### 核心原则
+**防范规则**：
+- 新增字段时，必须用 `grep 新字段名` 搜索全项目，**逐一确认**每个构造对象的位置都已添加
+- 特别注意 `server.js` 的 `formatItem()` 函数——它是白名单式返回，新增字段必须手动加入
+- 前端 `fetchXxx`/`loadXxx` 中构造新对象时也必须手动加入
+- **自查命令**：`grep -rn "airMonth" --include="*.js"` 确认每一层都有
 
-**所有公开的图片查询接口，必须默认过滤审核状态，只返回 `status: 1`（已通过）的图片。**
+### 错误 2：服务器代码未同步就跑脚本（已发生 3 次）
 
-### 查询分类
+**现象**：本地改了代码 push 到 GitHub，但服务器上直接跑脚本（没 git pull），跑的还是旧逻辑。
 
-#### 1. 公开查询（普通用户可访问）
-- **必须** 使用 `createPublicImageQuery()` 封装函数
-- **必须** 默认只查询 `status: 1` 的图片
-- **例外**：开发版/体验版可以查询 `status: 0` 用于测试
+**根因**：`git pull` 和 `node scripts/xxx.js` 分开执行时容易遗漏。
 
-#### 2. 管理查询（仅管理员可访问）
-- 需要先校验管理员权限
-- 可以查询所有状态的图片
+**防范规则**：
+- 服务器操作必须合并为一条命令：`git pull && node scripts/fetch_variety.js && pm2 restart movie-api`
+- 跑完脚本后必须重启 pm2，否则 server.js 的改动不生效
+- 跑完后检查日志，确认输出符合预期（如看到新的日志格式而非旧的）
 
-#### 3. 上传查重（检查图片是否已存在）
-- 需要查询 `status: in([0, 1, 2])` 所有状态
-- 这是合理的业务需求，不是漏洞
+### 错误 3：字符串匹配逻辑不够鲁棒（已发生 3 次）
 
-### 代码评审 Checklist
+**现象**：时间表匹配失败，`airMonth=0`，因为标题写法不一致（「种地吧4」vs「种地吧 第四季」、「这！就是街舞」vs「这就是街舞」）。
 
-新增或修改图片查询接口时，必须检查：
+**根因**：normalize 函数没有覆盖所有变体（数字/中文数字、标点符号、空格、「第」「季」等）。
 
-- [ ] 是否是公开查询接口？
-- [ ] 如果是公开查询，是否使用了统一的 `createPublicImageQuery()` 封装？
-- [ ] 是否正确处理了 `envVersion` 可能为 `undefined` 的情况？
-- [ ] 是否有管理员权限校验（如果是管理接口）？
+**防范规则**：
+- 涉及标题匹配的场景，normalize 函数必须处理：空格、标点（！！：:·—）、数字→中文、去掉「第」「季」
+- 新增时间表条目时，同时测试 normalize 后的匹配：`normalizeTitle('豆瓣实际标题')` 是否能匹配 `normalizeTitle('时间表key')`
+- 每次更新时间表后，跑 `git pull && node scripts/fetch_variety.js`，再检查 `airMonth` 是否正确
 
-### 上线回归测试
+### 错误 4：增量模式下脚本提前退出（已发生 1 次）
 
-每次上线前，必须执行以下测试用例：
+**现象**：没有新增数据时脚本直接 return，导致已有数据的字段（如 airMonth）不会被重新计算。
 
-1. **正式版用户**：只能看到已审核通过的图片
-2. **开发版/体验版**：可以看到待审核图片（用于测试）
-3. **管理员后台**：可以正确显示待审核/已通过/已拒绝的图片
+**根因**：`if (allItems.length === 0) return` 跳过了后续的榜单生成逻辑。
 
-### 历史问题
+**防范规则**：
+- 增量模式下即使没有新数据，也必须走完榜单生成流程（因为 normalize/过滤逻辑可能变了）
+- 提前退出的条件只能是「索引完全为空」，不能是「本次没有新增」
 
-**2026-04-09 事故**：
-- 问题：`getRandomImage` 云函数中 `wxContext.envVersion` 可能为 `undefined`，导致 `undefined !== 'release'` 为 `true`，正式版用户看到了待审核图片
-- 修复：使用 `(wxContext.envVersion || 'release') !== 'release'` 防御性编程
-- 改进：创建 `createPublicImageQuery()` 统一封装，避免类似问题
+### 错误 5：无效标签浪费请求触发限速（已发生 1 次）
 
-## 云函数开发规范
+**现象**：加了 12 组标签，其中 8 组返回 0 条数据，浪费大量 API 请求并触发豆瓣限速。
 
-### 环境版本判断
+**根因**：没有先用 API 验证标签是否有数据就盲目添加。
 
-```javascript
-// 正确写法
-const envVersion = wxContext.envVersion || 'release';
-const isDebugMode = envVersion !== 'release';
+**防范规则**：
+- 新增标签前，先用 API 验证：`curl 'https://movie.douban.com/j/new_search_subjects?tags=标签&year_range=2026,2026&start=0&limit=1'` 看 total 是否 > 0
+- 不确定效果的标签用 `yearOnly: true` 限制只抓当年，减少无效请求
+- 总标签数控制在 4-6 组以内
 
-// 错误写法（envVersion 可能为 undefined）
-const isDebugMode = wxContext.envVersion !== 'release';
-```
+### 错误 6：用户反馈问题后只改一处不排查全链路
 
-### 权限校验
+**现象**：用户说「榜单还有未播出的」，修了前端但没检查 server.js，修了 server.js 但没重跑脚本更新 data.json。
 
-所有管理类接口必须在入口处校验权限：
-
-```javascript
-const DEVELOPER_OPENIDS = ['xxx'];
-
-function isDeveloper(openid) {
-  return DEVELOPER_OPENIDS.includes(openid);
-}
-
-exports.main = async (event, context) => {
-  const { OPENID } = cloud.getWXContext();
-  
-  if (!isDeveloper(OPENID)) {
-    return { success: false, msg: '无权限操作', noPermission: true };
-  }
-  
-  // 业务逻辑...
-};
-```
+**防范规则**：
+- 用户反馈问题后，按数据链路**从头到尾排查**，不要只改最末端的过滤逻辑
+- 排查顺序：data.json 数据是否正确 → server.js 是否传字段 → 前端是否接收字段 → 前端过滤是否生效
+- 每修一处，重新验证整条链路

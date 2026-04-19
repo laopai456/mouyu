@@ -5,7 +5,25 @@ cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database();
 const _ = db.command;
 
-const IMAGE_WINDOW_DAYS = 3;
+const IMAGE_WINDOW_DAYS = 7;
+const BATCH_SIZE = 100;
+
+async function fetchAllApproved() {
+  let all = [];
+  let skip = 0;
+  while (true) {
+    const res = await db.collection('images')
+      .where({ status: 1 })
+      .orderBy('createTime', 'desc')
+      .skip(skip)
+      .limit(BATCH_SIZE)
+      .get();
+    all = all.concat(res.data);
+    if (res.data.length < BATCH_SIZE) break;
+    skip += BATCH_SIZE;
+  }
+  return all;
+}
 
 exports.main = async (event, context) => {
   try {
@@ -21,26 +39,28 @@ exports.main = async (event, context) => {
 
     console.log('DEBUG: envVersion=', wxContext.envVersion, 'isDebugMode=', isDebugMode, 'isFirstVisit=', isFirstVisit);
 
-    const now = Date.now();
-    const windowMs = IMAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-    const windowStart = now - windowMs;
-
-    console.log('DEBUG: windowStart=', windowStart, 'now=', now);
-
     let allImages = [];
 
     if (isDebugMode) {
-      const result = await db.collection('images').where({ status: 0 }).limit(100).get();
+      const result = await db.collection('images').where({ status: 0 }).limit(BATCH_SIZE).get();
       allImages = result.data;
       console.log('DEBUG: debug mode, fetched', allImages.length, 'pending images');
-    } else if (!isFirstVisit) {
-      const result = await db.collection('images').where({ status: 1 }).limit(500).get();
-      allImages = result.data.filter(img => img.reviewTime && img.reviewTime >= windowStart);
-      console.log('DEBUG: non-first visit, fetched', result.data.length, 'approved, after reviewTime filter:', allImages.length);
     } else {
-      const result = await db.collection('images').where({ status: 1 }).limit(500).get();
-      allImages = result.data;
-      console.log('DEBUG: first visit, fetched', allImages.length, 'approved images');
+      allImages = await fetchAllApproved();
+      console.log('DEBUG: fetched total', allImages.length, 'approved images');
+
+      if (!isFirstVisit) {
+        const now = Date.now();
+        const windowMs = IMAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+        const windowStart = now - windowMs;
+
+        const windowImages = allImages.filter(img => img.reviewTime && img.reviewTime >= windowStart);
+        console.log('DEBUG: window filter', windowImages.length, 'images in last', IMAGE_WINDOW_DAYS, 'days');
+
+        if (windowImages.length > 0) {
+          allImages = windowImages;
+        }
+      }
     }
 
     if (allImages.length === 0) {
@@ -57,7 +77,7 @@ exports.main = async (event, context) => {
     const newImages = shuffled.filter(img => !seenIds.includes(img._id));
     const selected = newImages.slice(0, requestCount);
 
-    console.log('DEBUG: selected', selected.length, 'images');
+    console.log('DEBUG: selected', selected.length, 'images from', allImages.length, 'candidates');
 
     if (selected.length === 0 && !isFirstVisit && !isDebugMode) {
       return { success: false, message: '最近' + IMAGE_WINDOW_DAYS + '天没有新图片了', noMore: true };
