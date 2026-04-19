@@ -2,6 +2,7 @@ const app = getApp();
 
 const PRELOAD_COUNT = 3;
 const MIN_QUEUE_SIZE = 2;
+const MAX_SEEN_IDS = 500;
 const ADMIN_TAP_COUNT = 5;
 const ADMIN_TAP_INTERVAL = 1000;
 const NO_MORE_TAP_COUNT = 3;
@@ -59,7 +60,9 @@ Page({
   onLoad() {
     const savedSeenIds = wx.getStorageSync('seenIds') || [];
     const hasVisited = wx.getStorageSync('hasVisitedBefore') || false;
-    this.seenIds = savedSeenIds;
+    this.seenIds = savedSeenIds.length > MAX_SEEN_IDS
+      ? savedSeenIds.slice(savedSeenIds.length - MAX_SEEN_IDS)
+      : savedSeenIds;
     this.setData({ hasVisitedBefore: hasVisited });
 
     try {
@@ -238,6 +241,9 @@ Page({
 
     const image = this.imageQueue.shift();
     this.seenIds.push(image._id);
+    if (this.seenIds.length > MAX_SEEN_IDS) {
+      this.seenIds = this.seenIds.slice(this.seenIds.length - MAX_SEEN_IDS);
+    }
     try { wx.setStorageSync('seenIds', this.seenIds); } catch (e) { console.warn('seenIds写入失败', e); }
 
     if (this.data.isDebugMode && this.data.debugStats.unseen > 0) {
