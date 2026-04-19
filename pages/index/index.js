@@ -31,11 +31,9 @@ Page({
     hasLikedToday: false,
     canUpload: false,
     flyingTexts: [],
-    laughCount: 0,
     laughMode: false,
     stageLight: false,
     hasVisitedBefore: false,
-    contactInfo: '',
     adminContact: '',
     submitContact: '',
     isDebugMode: false,
@@ -137,7 +135,6 @@ Page({
         if (res.data && res.data.length > 0) {
           const item = res.data[0];
           this.setData({
-            contactInfo: item.contact || '',
             adminContact: item.adminContact || '',
             submitContact: item.submitContact || ''
           });
@@ -274,7 +271,6 @@ Page({
       dislikeCount: remainingDislikes,
       likeCount: image.likeCount || 0,
       noMoreImages: false,
-      laughCount: this.laughCounts[image._id],
     });
 
     this.preloadImages();
@@ -578,20 +574,22 @@ Page({
       this.setData({ stageLight: false });
     }, 3000);
 
-    if (this.data.laughCount < 15 && this.data.imageId) {
-      this.laughCounts[this.data.imageId] = (this.laughCounts[this.data.imageId] || 0) + 1;
-      this.setData({ laughCount: this.laughCounts[this.data.imageId] });
+    if (this.data.imageId) {
+      const currentCount = this.laughCounts[this.data.imageId] || 0;
+      if (currentCount < 15) {
+        this.laughCounts[this.data.imageId] = currentCount + 1;
 
-      wx.cloud.callFunction({
-        name: 'laughImage',
-        data: {
-          imageId: this.data.imageId,
-          laughCount: this.laughCounts[this.data.imageId]
-        },
-        fail: (err) => {
-          console.error('记录哈哈失败', err);
-        }
-      });
+        wx.cloud.callFunction({
+          name: 'laughImage',
+          data: {
+            imageId: this.data.imageId,
+            laughCount: this.laughCounts[this.data.imageId]
+          },
+          fail: (err) => {
+            console.error('记录哈哈失败', err);
+          }
+        });
+      }
     }
 
     setTimeout(() => {
