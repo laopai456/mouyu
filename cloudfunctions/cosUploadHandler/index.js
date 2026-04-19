@@ -56,6 +56,7 @@ exports.main = async (event, context) => {
           status: 0,
           dislikeCount: 0,
           likeCount: 0,
+          laughCount: 0,
           date: today,
           yearMonth,
           month,

@@ -22,6 +22,8 @@ exports.main = async (event, context) => {
           uploaderOpenid: FromUserName,
           status: 0,
           dislikeCount: 0,
+          likeCount: 0,
+          laughCount: 0,
           createTime: Date.now(),
         }
       });
