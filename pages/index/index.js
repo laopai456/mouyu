@@ -265,8 +265,8 @@ Page({
 
     const alreadyDisliked = this.dislikedImages.has(image._id);
     const remainingDislikes = alreadyDisliked
-      ? Math.max(0, 3 - this.userDislikeToday)
-      : 3;
+      ? 0
+      : Math.max(0, 3 - this.userDislikeToday);
 
     this.setData({
       imageUrl: displayUrl,
