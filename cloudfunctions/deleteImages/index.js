@@ -4,8 +4,17 @@ cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 
 const db = cloud.database();
 
+const DEVELOPER_OPENIDS = [
+  'oWatD3bwu0aVaFTPvrrerAU_C2zY'
+];
+
 exports.main = async (event, context) => {
   const { action, imageIds, id, md5 } = event;
+  const { OPENID } = cloud.getWXContext();
+
+  if (!DEVELOPER_OPENIDS.includes(OPENID)) {
+    return { success: false, message: '无权限操作' };
+  }
 
   if (action === 'delete') {
     if (!id) {
