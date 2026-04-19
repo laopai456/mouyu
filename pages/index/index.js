@@ -238,7 +238,7 @@ Page({
 
     const image = this.imageQueue.shift();
     this.seenIds.push(image._id);
-    wx.setStorageSync('seenIds', this.seenIds);
+    try { wx.setStorageSync('seenIds', this.seenIds); } catch (e) { console.warn('seenIds写入失败', e); }
 
     if (this.data.isDebugMode && this.data.debugStats.unseen > 0) {
       this.setData({
@@ -247,7 +247,7 @@ Page({
     }
 
     if (!this.data.hasVisitedBefore) {
-      wx.setStorageSync('hasVisitedBefore', true);
+      try { wx.setStorageSync('hasVisitedBefore', true); } catch (e) { console.warn('hasVisitedBefore写入失败', e); }
       this.setData({ hasVisitedBefore: true });
     }
 
@@ -354,7 +354,7 @@ Page({
       console.log('今天已送过花，直接返回');
       if (this.data.laughMode) {
         this.setData({ laughMode: false });
-        wx.setStorageSync('laughModeUnlocked', '');
+        try { wx.setStorageSync('laughModeUnlocked', ''); } catch (e) { console.warn('laughModeUnlocked写入失败', e); }
       }
       return;
     }
@@ -371,8 +371,8 @@ Page({
           return;
         }
         const today = new Date().toISOString().split('T')[0];
-        wx.setStorageSync('lastLikeDate', today);
-        wx.setStorageSync('laughModeUnlocked', today);
+        try { wx.setStorageSync('lastLikeDate', today); } catch (e) { console.warn('lastLikeDate写入失败', e); }
+        try { wx.setStorageSync('laughModeUnlocked', today); } catch (e) { console.warn('laughModeUnlocked写入失败', e); }
         this.setData({
           likeCount: this.data.likeCount + 1,
           hasLikedToday: true,
