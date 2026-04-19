@@ -6,7 +6,7 @@
   </view>
 
   <view class="preview-list" wx:if="{{images.length > 0}}">
-    <view class="preview-item" wx:for="{{images}}" wx:key="index">
+    <view class="preview-item" wx:for="{{images}}" wx:key="*this">
       <image src="{{item}}" mode="aspectFill" />
       <view class="remove-btn" bindtap="removeImage" data-index="{{index}}">×</view>
     </view>
