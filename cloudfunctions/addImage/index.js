@@ -75,6 +75,7 @@ exports.main = async (event, context) => {
         yearMonth,
         month,
         createTime: Date.now(),
+        reviewTime: Date.now(),
       }
     });
 
