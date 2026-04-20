@@ -3,11 +3,15 @@ import json
 import os
 import hashlib
 import re
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 TDL_PATH = r"C:\tdl\tdl.exe"
 PROXY = "socks5://127.0.0.1:7897"
+MAX_WORKERS = 2
 
 CHANNELS = {
     "woshadiao": 200    ,
@@ -24,37 +28,43 @@ BASE_DIR = Path(__file__).parent
 MD5_CACHE_FILE = BASE_DIR / "cache" / "md5_cache.json"
 PROGRESS_CACHE_FILE = BASE_DIR / "cache" / "progress_cache.json"
 
+cache_lock = threading.Lock()
+
 
 def load_md5_cache():
-    MD5_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    if MD5_CACHE_FILE.exists():
-        try:
-            with open(MD5_CACHE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
+    with cache_lock:
+        MD5_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        if MD5_CACHE_FILE.exists():
+            try:
+                with open(MD5_CACHE_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
 
 
 def save_md5_cache(cache):
-    with open(MD5_CACHE_FILE, "w", encoding="utf-8") as f:
-        json.dump(cache, f, ensure_ascii=False, indent=2)
+    with cache_lock:
+        with open(MD5_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
 
 
 def load_progress_cache():
-    PROGRESS_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    if PROGRESS_CACHE_FILE.exists():
-        try:
-            with open(PROGRESS_CACHE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
+    with cache_lock:
+        PROGRESS_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        if PROGRESS_CACHE_FILE.exists():
+            try:
+                with open(PROGRESS_CACHE_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
 
 
 def save_progress_cache(cache):
-    with open(PROGRESS_CACHE_FILE, "w", encoding="utf-8") as f:
-        json.dump(cache, f, ensure_ascii=False, indent=2)
+    with cache_lock:
+        with open(PROGRESS_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
 
 
 def is_image(filename):
@@ -70,54 +80,28 @@ def calculate_md5(file_path):
     return hash_md5.hexdigest()
 
 
-def run_cmd(cmd, desc="", max_retries=3, target_dir=None):
+def run_cmd(cmd, desc="", max_retries=3, target_dir=None, channel_prefix=""):
+    prefix = f"[{channel_prefix}] " if channel_prefix else ""
     print(f"\n{'='*50}")
-    print(f"{desc}")
+    print(f"{prefix}{desc}")
     print(f"{'='*50}")
 
     for attempt in range(max_retries):
-        try:
-            subprocess.run("taskkill /F /IM tdl.exe 2>nul", shell=True, capture_output=True)
-        except:
-            pass
-        
         process = subprocess.Popen(
             cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace"
         )
 
-        import threading
-        import time
         output_lines = []
         start_time = time.time()
 
-        download_count = 0
-        channel_name = ""
-        initial_count = 0
-        if target_dir and os.path.exists(target_dir):
-            initial_count = len([f for f in os.listdir(target_dir) if os.path.isfile(os.path.join(target_dir, f)) and is_image(f)])
-
         def read_output():
-            nonlocal download_count, channel_name
             try:
                 for line in process.stdout:
                     if line.strip():
                         output_lines.append(line)
-                        if '(' in line and ')' in line:
-                            parts = line.split('(')
-                            if len(parts) > 1:
-                                channel_name = parts[0].strip()
             except:
                 pass
-
-        def check_downloaded():
-            nonlocal download_count
-            if target_dir and os.path.exists(target_dir):
-                current_count = len([f for f in os.listdir(target_dir) if os.path.isfile(os.path.join(target_dir, f)) and is_image(f)])
-                new_count = current_count - initial_count
-                if new_count > download_count:
-                    download_count = new_count
-                    print(f"  {channel_name}: 第{download_count}张 done")
 
         thread = threading.Thread(target=read_output, daemon=True)
         thread.start()
@@ -131,15 +115,19 @@ def run_cmd(cmd, desc="", max_retries=3, target_dir=None):
 
         while process.poll() is None:
             time.sleep(1)
-            check_downloaded()
             current_len = len(output_lines)
             if current_len > last_output:
+                new_lines = output_lines[last_output:]
+                for line in new_lines:
+                    stripped = line.strip()
+                    if stripped:
+                        print(f"  {prefix}{stripped}")
                 last_output = current_len
                 last_output_time = time.time()
                 stuck_count = 0
             elif time.time() - last_output_time > no_output_timeout:
                 stuck_count += 1
-                print(f"\n{no_output_timeout}秒无输出，可能卡住 ({stuck_count}/{max_stuck})...")
+                print(f"  {prefix}{no_output_timeout}秒无输出，可能卡住 ({stuck_count}/{max_stuck})...")
                 try:
                     process.stdin.write("y\n")
                     process.stdin.flush()
@@ -147,12 +135,12 @@ def run_cmd(cmd, desc="", max_retries=3, target_dir=None):
                     pass
                 last_output_time = time.time()
                 if stuck_count >= max_stuck:
-                    print(f"连续{stuck_count}次卡住，终止并重启...")
+                    print(f"  {prefix}连续{stuck_count}次卡住，终止并重启...")
                     process.terminate()
                     process.wait(5)
                     break
             elif time.time() - start_time > timeout:
-                print(f"\n总超时 ({timeout}秒)，终止命令")
+                print(f"  {prefix}总超时 ({timeout}秒)，终止命令")
                 process.terminate()
                 process.wait(5)
                 break
@@ -163,9 +151,9 @@ def run_cmd(cmd, desc="", max_retries=3, target_dir=None):
             return True
 
         if attempt < max_retries - 1:
-            print(f"\n命令失败，返回码 {process.returncode}，重试 ({attempt + 1}/{max_retries})...")
+            print(f"  {prefix}命令失败，返回码 {process.returncode}，重试 ({attempt + 1}/{max_retries})...")
 
-    print(f"\nError: 命令执行失败，已重试 {max_retries} 次")
+    print(f"  {prefix}Error: 命令执行失败，已重试 {max_retries} 次")
     return False
 
 
@@ -180,19 +168,19 @@ def export_channel(channel, limit, output_file, start_id=None):
         cmd = f'"{TDL_PATH}" chat export -c {channel} -o "{output_file}" -T last -i {limit} --proxy {PROXY} --with-content'
         desc = f"导出频道: {channel} (最近 {limit} 条)"
     
-    return run_cmd(cmd, desc)
+    return run_cmd(cmd, desc, channel_prefix=channel)
 
 
 def filter_and_download(export_file, download_dir, channel):
     if not os.path.exists(export_file):
-        print(f"导出文件不存在: {export_file}")
+        print(f"  [{channel}] 导出文件不存在: {export_file}")
         return
 
     with open(export_file, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     messages = data.get("messages", [])
-    print(f"获取消息数: {len(messages)}")
+    print(f"  [{channel}] 获取消息数: {len(messages)}")
 
     file_list = []
     for msg in messages:
@@ -204,10 +192,10 @@ def filter_and_download(export_file, download_dir, channel):
             continue
         file_list.append(msg)
 
-    print(f"图片消息数: {len(file_list)}")
+    print(f"  [{channel}] 图片消息数: {len(file_list)}")
 
     if not file_list:
-        print("没有找到图片")
+        print(f"  [{channel}] 没有找到图片")
         return
 
     sequential_groups = []
@@ -259,46 +247,42 @@ def filter_and_download(export_file, download_dir, channel):
 
     filtered = [msg for msg in file_list if msg.get("file") not in sequential_files]
 
-    print(f"过滤后图片数: {len(filtered)} (跳过连续漫画: {len(sequential_files)} 张)")
+    print(f"  [{channel}] 过滤后图片数: {len(filtered)} (跳过连续漫画: {len(sequential_files)} 张)")
 
     if not filtered:
-        print("没有找到图片")
+        print(f"  [{channel}] 没有找到图片")
         return
 
     filtered_file = export_file.replace(".json", "_filtered.json")
     with open(filtered_file, "w", encoding="utf-8") as f:
         json.dump({"id": data["id"], "messages": filtered}, f, ensure_ascii=False, indent=2)
 
-    target_dir = DOWNLOAD_DIR
+    target_dir = download_dir
     os.makedirs(target_dir, exist_ok=True)
 
-    md5_cache = load_md5_cache()
-
-    cached_files = set(os.listdir(target_dir)) if os.path.exists(target_dir) else set()
-    print(f"目录已有 {len(cached_files)} 个文件")
-
     cmd = f'"{TDL_PATH}" dl -f "{filtered_file}" -d "{target_dir}" --proxy {PROXY} --skip-same --continue'
-    run_cmd(cmd, f"下载 {channel} 的 {len(filtered)} 张图片到 {target_dir}", target_dir=target_dir)
+    run_cmd(cmd, f"下载 {channel} 的 {len(filtered)} 张图片", channel_prefix=channel)
 
-    new_files = [f for f in os.listdir(target_dir) if os.path.isfile(os.path.join(target_dir, f)) and f not in cached_files]
+    new_files = [f for f in os.listdir(target_dir) if os.path.isfile(os.path.join(target_dir, f)) and is_image(f)]
+    
+    with cache_lock:
+        md5_cache = load_md5_cache()
+
     skipped = 0
     downloaded = 0
 
     for filename in new_files:
-        if not is_image(filename):
-            continue
-
         file_path = os.path.join(target_dir, filename)
         try:
             file_size_kb = os.path.getsize(file_path) / 1024
             if file_size_kb < MIN_FILE_SIZE_KB:
-                print(f"图片太小({file_size_kb:.0f}KB)，删除: {filename}")
+                print(f"  [{channel}] 图片太小({file_size_kb:.0f}KB)，删除: {filename}")
                 os.remove(file_path)
                 continue
 
             md5 = calculate_md5(file_path)
             if md5 in md5_cache:
-                print(f"重复图片，删除: {filename}")
+                print(f"  [{channel}] 重复图片，删除: {filename}")
                 os.remove(file_path)
                 skipped += 1
             else:
@@ -309,10 +293,11 @@ def filter_and_download(export_file, download_dir, channel):
                 }
                 downloaded += 1
         except Exception as e:
-            print(f"处理失败 {filename}: {e}")
+            print(f"  [{channel}] 处理失败 {filename}: {e}")
 
-    save_md5_cache(md5_cache)
-    print(f"下载完成: 新增 {downloaded} 张, 跳过重复 {skipped} 张")
+    with cache_lock:
+        save_md5_cache(md5_cache)
+    print(f"  [{channel}] 下载完成: 新增 {downloaded} 张, 跳过重复 {skipped} 张")
 
     max_id = 0
     if messages:
@@ -322,15 +307,39 @@ def filter_and_download(export_file, download_dir, channel):
                 max_id = max(max_id, msg_id)
     
     if max_id > 0:
-        progress_cache = load_progress_cache()
-        progress_cache[channel] = {
-            "last_id": max_id,
-            "last_time": datetime.now().isoformat()
-        }
-        save_progress_cache(progress_cache)
-        print(f"已记录进度: 频道 {channel} 最后消息ID: {max_id}")
+        with cache_lock:
+            progress_cache = load_progress_cache()
+            progress_cache[channel] = {
+                "last_id": max_id,
+                "last_time": datetime.now().isoformat()
+            }
+            save_progress_cache(progress_cache)
+        print(f"  [{channel}] 已记录进度: 最后消息ID: {max_id}")
     
-    os.remove(filtered_file)
+    try:
+        os.remove(filtered_file)
+    except:
+        pass
+
+
+def process_channel(channel, limit):
+    print(f"\n{'='*50}")
+    print(f"[{channel}] 开始处理 (限制 {limit} 条)")
+    print(f"{'='*50}")
+
+    export_file = os.path.join(DOWNLOAD_DIR, f"{channel}_export.json")
+
+    if export_channel(channel, limit, export_file):
+        filter_and_download(export_file, DOWNLOAD_DIR, channel)
+
+    if os.path.exists(export_file):
+        try:
+            os.remove(export_file)
+        except:
+            pass
+
+    print(f"[{channel}] 处理完成")
+    return channel
 
 
 def main():
@@ -352,6 +361,7 @@ def main():
         print(f"  总记录数: {len(cache)}")
         print(f"  图片记录: {image_count}")
         print(f"  下载时间范围: {earliest[:10] if earliest else '未知'} ~ {latest[:10] if latest else '未知'}")
+        print(f"  并发数: {MAX_WORKERS}")
         print(f"{'='*50}")
 
         response = input("是否清理缓存重新下载? (y/N): ").strip().lower()
@@ -363,19 +373,25 @@ def main():
         else:
             print("保留现有缓存，继续下载。")
     else:
-        print("\n首次运行，无缓存，将开始全新下载。")
+        print(f"\n首次运行，无缓存，将开始全新下载。并发数: {MAX_WORKERS}")
 
-    for channel, limit in CHANNELS.items():
-        print(f"\n\n处理频道: {channel} (限制 {limit} 条)")
-        export_file = os.path.join(DOWNLOAD_DIR, f"{channel}_export.json")
+    print(f"\n开始并发处理 {len(CHANNELS)} 个频道 (并发数: {MAX_WORKERS})...")
 
-        if export_channel(channel, limit, export_file):
-            filter_and_download(export_file, DOWNLOAD_DIR, channel)
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {
+            executor.submit(process_channel, channel, limit): channel
+            for channel, limit in CHANNELS.items()
+        }
 
-        if os.path.exists(export_file):
-            os.remove(export_file)
+        for future in as_completed(futures):
+            channel = futures[future]
+            try:
+                result = future.result()
+                print(f"\n频道 {result} 全部完成")
+            except Exception as e:
+                print(f"\n频道 {channel} 处理异常: {e}")
 
-    print("\n\n完成!")
+    print("\n\n所有频道处理完成!")
 
 
 if __name__ == "__main__":
