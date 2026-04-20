@@ -323,23 +323,17 @@ def filter_and_download(export_file, download_dir, channel):
 
 
 def process_channel(channel, limit):
-    print(f"\n{'='*50}")
-    print(f"[{channel}] 开始处理 (限制 {limit} 条)")
-    print(f"{'='*50}")
-
     export_file = os.path.join(DOWNLOAD_DIR, f"{channel}_export.json")
 
     if export_channel(channel, limit, export_file):
-        filter_and_download(export_file, DOWNLOAD_DIR, channel)
+        return export_file
 
     if os.path.exists(export_file):
         try:
             os.remove(export_file)
         except:
             pass
-
-    print(f"[{channel}] 处理完成")
-    return channel
+    return None
 
 
 def main():
@@ -361,7 +355,6 @@ def main():
         print(f"  总记录数: {len(cache)}")
         print(f"  图片记录: {image_count}")
         print(f"  下载时间范围: {earliest[:10] if earliest else '未知'} ~ {latest[:10] if latest else '未知'}")
-        print(f"  并发数: {MAX_WORKERS}")
         print(f"{'='*50}")
 
         response = input("是否清理缓存重新下载? (y/N): ").strip().lower()
@@ -373,21 +366,39 @@ def main():
         else:
             print("保留现有缓存，继续下载。")
     else:
-        print(f"\n首次运行，无缓存，将开始全新下载。并发数: {MAX_WORKERS}")
+        print(f"\n首次运行，无缓存，将开始全新下载。")
 
-    print(f"\n开始并发处理 {len(CHANNELS)} 个频道 (并发数: {MAX_WORKERS})...")
+    print(f"\n阶段1: 串行导出 {len(CHANNELS)} 个频道...")
+    export_results = {}
+    for channel, limit in CHANNELS.items():
+        export_file = process_channel(channel, limit)
+        if export_file:
+            export_results[channel] = export_file
+
+    print(f"\n阶段2: 并发下载 {len(export_results)} 个频道 (并发数: {MAX_WORKERS})...")
+
+    def download_task(channel, export_file):
+        try:
+            filter_and_download(export_file, DOWNLOAD_DIR, channel)
+            return channel
+        finally:
+            if os.path.exists(export_file):
+                try:
+                    os.remove(export_file)
+                except:
+                    pass
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
-            executor.submit(process_channel, channel, limit): channel
-            for channel, limit in CHANNELS.items()
+            executor.submit(download_task, channel, export_file): channel
+            for channel, export_file in export_results.items()
         }
 
         for future in as_completed(futures):
             channel = futures[future]
             try:
-                result = future.result()
-                print(f"\n频道 {result} 全部完成")
+                future.result()
+                print(f"\n频道 {channel} 全部完成")
             except Exception as e:
                 print(f"\n频道 {channel} 处理异常: {e}")
 
