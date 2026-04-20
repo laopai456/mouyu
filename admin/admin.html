@@ -753,7 +753,7 @@
       try {
         await app.callFunction({
           name: 'deleteImages',
-          data: { action: 'batchDelete', imageIds: uncheckedIds }
+          data: { action: 'batchDelete', imageIds: uncheckedIds, adminOpenid: currentUser.openid }
         });
         loadBatchImages();
         loadStats();
@@ -778,7 +778,7 @@
         if (uncheckedIds.length > 0) {
           promises.push(app.callFunction({
             name: 'deleteImages',
-            data: { action: 'batchDelete', imageIds: uncheckedIds }
+            data: { action: 'batchDelete', imageIds: uncheckedIds, adminOpenid: currentUser.openid }
           }));
         }
         await Promise.all(promises);
@@ -996,7 +996,8 @@
           name: 'deleteImages',
           data: {
             action: 'batchDelete',
-            imageIds: [imageId]
+            imageIds: [imageId],
+            adminOpenid: currentUser.openid
           }
         });
         
@@ -1020,7 +1021,8 @@
           name: 'deleteImages',
           data: {
             action: 'batchDelete',
-            imageIds: ids
+            imageIds: ids,
+            adminOpenid: currentUser.openid
           }
         });
         
@@ -1038,7 +1040,8 @@
         const result = await app.callFunction({
           name: 'deleteImages',
           data: {
-            action: 'migrateBlacklist'
+            action: 'migrateBlacklist',
+            adminOpenid: currentUser.openid
           }
         });
 
@@ -1152,7 +1155,8 @@
           name: 'deleteImages',
           data: {
             action: 'batchDelete',
-            imageIds: [current.id]
+            imageIds: [current.id],
+            adminOpenid: currentUser.openid
           }
         });
         
