@@ -397,7 +397,6 @@
                 <button class="btn btn-sm" id="gridModeBtn" onclick="toggleGridDropdown()">网格审核 ▾</button>
                 <div class="grid-dropdown-menu hidden" id="gridDropdownMenu">
                   <div onclick="switchReviewMode('grid', 4)">四宫格 (4张)</div>
-                  <div onclick="switchReviewMode('grid', 8)">八宫格 (8张)</div>
                 </div>
               </div>
             </div>
@@ -480,8 +479,8 @@
     let pageState = { 0: { page: 0, hasMore: true }, 1: { page: 0, hasMore: true }, 2: { page: 0, hasMore: true } };
     const PAGE_SIZE = 50;
     
-    let reviewMode = 'list';
-    let gridSize = 8;
+    let reviewMode = 'grid';
+    let gridSize = 4;
     let batchImages = [];
     let selectedMap = new Map();
     
@@ -610,7 +609,7 @@
       document.getElementById('tabsBar').classList.remove('hidden');
       
       loadStats();
-      loadImages(0);
+      switchReviewMode('grid', 4);
       setupDropZone();
     }
     
@@ -656,7 +655,7 @@
       } else {
         listBtn.classList.remove('btn-primary');
         gridBtn.classList.add('btn-primary');
-        gridBtn.textContent = (gridSize === 4 ? '四' : '八') + '宫格审核 ▾';
+        gridBtn.textContent = '四宫格审核 ▾';
         listContainer.classList.add('hidden');
         gridContainer.classList.remove('hidden');
         if (batchActions) batchActions.style.display = 'flex';
@@ -744,10 +743,12 @@
     }
     
     async function batchRejectUnchecked() {
+      console.log('batchRejectUnchecked 被调用');
       const uncheckedIds = batchImages
         .filter(img => !selectedMap.get(img._id))
         .map(img => img._id);
       
+      console.log('uncheckedIds:', uncheckedIds);
       if (uncheckedIds.length === 0) return;
       
       try {
