@@ -9,10 +9,11 @@ const DEVELOPER_OPENIDS = [
 ];
 
 exports.main = async (event, context) => {
-  const { action, imageIds, id, md5 } = event;
+  const { action, imageIds, id, md5, adminOpenid } = event;
   const { OPENID } = cloud.getWXContext();
+  const requestOpenid = adminOpenid || OPENID;
 
-  if (!DEVELOPER_OPENIDS.includes(OPENID)) {
+  if (!DEVELOPER_OPENIDS.includes(requestOpenid)) {
     return { success: false, message: '无权限操作' };
   }
 
