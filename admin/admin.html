@@ -1215,9 +1215,7 @@
         document.getElementById('uploadTab').classList.remove('hidden');
       } else if (tab === 'pending') {
         document.getElementById('pendingTab').classList.remove('hidden');
-        const batchActions = document.getElementById('batchReviewActions');
-        if (batchActions) batchActions.style.display = 'none';
-        loadImages(0);
+        switchReviewMode('grid', 4);
       } else if (tab === 'passed') {
         document.getElementById('passedTab').classList.remove('hidden');
         loadImages(1);
