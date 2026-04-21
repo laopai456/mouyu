@@ -328,7 +328,7 @@
     <div class="modal-info" id="modalInfo"></div>
   </div>
   
-  <div class="container">
+  <div class="container full-width">
     <div class="header">
       <h1>木偶鱼 - 管理后台</h1>
       <div class="user-info">
@@ -394,7 +394,7 @@
             <div class="mode-switch">
               <button class="btn btn-sm" id="listModeBtn" onclick="switchReviewMode('list')">列表模式</button>
               <div class="grid-dropdown">
-                <button class="btn btn-sm" id="gridModeBtn" onclick="toggleGridDropdown()">网格审核 ▾</button>
+                <button class="btn btn-sm btn-primary" id="gridModeBtn" onclick="toggleGridDropdown()">四宫格 ▾</button>
                 <div class="grid-dropdown-menu hidden" id="gridDropdownMenu">
                   <div onclick="switchReviewMode('grid', 4)">四宫格 (4张)</div>
                 </div>
@@ -402,11 +402,11 @@
             </div>
           </div>
           
-          <div id="pendingListContainer">
+          <div id="pendingListContainer" class="hidden">
             <div id="pendingList"></div>
           </div>
           
-          <div id="pendingGridContainer" class="hidden">
+          <div id="pendingGridContainer">
             <div class="batch-review-grid" id="batchReviewGrid"></div>
           </div>
         </div>
@@ -655,7 +655,7 @@
       } else {
         listBtn.classList.remove('btn-primary');
         gridBtn.classList.add('btn-primary');
-        gridBtn.textContent = '四宫格审核 ▾';
+        gridBtn.textContent = '四宫格 ▾';
         listContainer.classList.add('hidden');
         gridContainer.classList.remove('hidden');
         if (batchActions) batchActions.style.display = 'flex';
