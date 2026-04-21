@@ -2,6 +2,8 @@ Page({
   data: {
     currentTab: 0,
     images: [],
+    currentImage: null,
+    currentIndex: 0,
     pendingCount: 0,
     isAdmin: false,
     loading: true,
@@ -83,7 +85,15 @@ Page({
         createTimeStr: this.formatTime(item.createTime)
       }));
 
-      this.setData({ images });
+      const updateData = { images };
+      if (status === 0 && images.length > 0) {
+        updateData.currentIndex = 0;
+        updateData.currentImage = images[0];
+      } else if (status === 0) {
+        updateData.currentImage = null;
+        updateData.currentIndex = 0;
+      }
+      this.setData(updateData);
     } catch (err) {
       console.error(err);
       wx.showToast({ title: '加载失败', icon: 'none' });
@@ -95,43 +105,90 @@ Page({
     return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
   },
 
+  previewCurrentImage() {
+    if (!this.data.currentImage) return;
+    wx.previewImage({ urls: [this.data.currentImage.url] });
+  },
+
   previewImage(e) {
     wx.previewImage({ urls: [e.currentTarget.dataset.url] });
   },
 
-  async approve(e) {
+  async approve() {
     if (!this.data.isAdmin) {
       wx.showToast({ title: '无权限', icon: 'none' });
       return;
     }
-    
-    const imageId = e.currentTarget.dataset.id;
+    if (!this.data.currentImage) return;
+
+    const imageId = this.data.currentImage._id;
     try {
       await wx.cloud.callFunction({
         name: 'admin',
         data: { action: 'review', imageId, status: 1 }
       });
       wx.showToast({ title: '已通过', icon: 'success' });
-      this.loadImages();
+
+      const { images, currentIndex, pendingCount } = this.data;
+      const newImages = images.filter((_, i) => i !== currentIndex);
+      const newPendingCount = Math.max(0, pendingCount - 1);
+
+      if (newImages.length > 0) {
+        const nextIndex = Math.min(currentIndex, newImages.length - 1);
+        this.setData({
+          images: newImages,
+          currentIndex: nextIndex,
+          currentImage: newImages[nextIndex],
+          pendingCount: newPendingCount,
+        });
+      } else {
+        this.setData({
+          images: [],
+          currentImage: null,
+          currentIndex: 0,
+          pendingCount: newPendingCount,
+        });
+      }
     } catch (err) {
       wx.showToast({ title: '操作失败', icon: 'none' });
     }
   },
 
-  async reject(e) {
+  async reject() {
     if (!this.data.isAdmin) {
       wx.showToast({ title: '无权限', icon: 'none' });
       return;
     }
-    
-    const imageId = e.currentTarget.dataset.id;
+    if (!this.data.currentImage) return;
+
+    const imageId = this.data.currentImage._id;
     try {
       await wx.cloud.callFunction({
         name: 'admin',
         data: { action: 'review', imageId, status: 2 }
       });
       wx.showToast({ title: '已拒绝', icon: 'success' });
-      this.loadImages();
+
+      const { images, currentIndex, pendingCount } = this.data;
+      const newImages = images.filter((_, i) => i !== currentIndex);
+      const newPendingCount = Math.max(0, pendingCount - 1);
+
+      if (newImages.length > 0) {
+        const nextIndex = Math.min(currentIndex, newImages.length - 1);
+        this.setData({
+          images: newImages,
+          currentIndex: nextIndex,
+          currentImage: newImages[nextIndex],
+          pendingCount: newPendingCount,
+        });
+      } else {
+        this.setData({
+          images: [],
+          currentImage: null,
+          currentIndex: 0,
+          pendingCount: newPendingCount,
+        });
+      }
     } catch (err) {
       wx.showToast({ title: '操作失败', icon: 'none' });
     }

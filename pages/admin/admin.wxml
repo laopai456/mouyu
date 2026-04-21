@@ -11,17 +11,30 @@
     <view class="tab {{currentTab === 2 ? 'active' : ''}}" bindtap="switchTab" data-tab="2">已拒绝</view>
   </view>
 
-  <scroll-view class="list" scroll-y enhanced show-scrollbar="{{false}}">
+  <block wx:if="{{currentTab === 0 && isAdmin}}">
+    <view class="review-mode" wx:if="{{currentImage}}">
+      <view class="review-counter">{{currentIndex + 1}} / {{images.length}}</view>
+      <image class="review-image" src="{{currentImage.url}}" mode="aspectFit" bindtap="previewCurrentImage" />
+      <view class="review-info">
+        <text class="review-time">{{currentImage.createTimeStr}}</text>
+      </view>
+      <view class="review-actions">
+        <view class="review-btn review-reject" bindtap="reject">拒绝</view>
+        <view class="review-btn review-approve" bindtap="approve">通过</view>
+      </view>
+    </view>
+    <view class="empty" wx:elif="{{images.length === 0 && !loading}}">
+      <text>暂无待审核内容 🎉</text>
+    </view>
+  </block>
+
+  <scroll-view class="list" scroll-y enhanced show-scrollbar="{{false}}" wx:elif="{{isAdmin}}">
     <block wx:for="{{images}}" wx:key="_id">
       <view class="item">
         <image class="preview" src="{{item.url}}" mode="aspectFill" bindtap="previewImage" data-url="{{item.url}}" />
         <view class="info">
           <text class="time">{{item.createTimeStr}}</text>
-          <view class="actions" wx:if="{{currentTab === 0}}">
-            <view class="btn approve" bindtap="approve" data-id="{{item._id}}">通过</view>
-            <view class="btn reject" bindtap="reject" data-id="{{item._id}}">拒绝</view>
-          </view>
-          <view class="status" wx:elif="{{currentTab === 1}}">
+          <view class="status" wx:if="{{currentTab === 1}}">
             <text class="approved">已通过</text>
           </view>
           <view class="status" wx:elif="{{currentTab === 2}}">
