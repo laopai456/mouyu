@@ -68,6 +68,64 @@ page {
   border-radius: 2rpx;
 }
 
+.review-mode {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+}
+
+.review-counter {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 26rpx;
+  padding: 20rpx 0 10rpx;
+}
+
+.review-image {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+}
+
+.review-info {
+  padding: 16rpx 30rpx;
+  display: flex;
+  align-items: center;
+}
+
+.review-time {
+  font-size: 24rpx;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.review-actions {
+  display: flex;
+  padding: 20rpx 30rpx;
+  padding-bottom: calc(20rpx + env(safe-area-inset-bottom));
+  gap: 30rpx;
+}
+
+.review-btn {
+  flex: 1;
+  text-align: center;
+  padding: 24rpx 0;
+  border-radius: 12rpx;
+  font-size: 30rpx;
+  font-weight: 500;
+}
+
+.review-approve {
+  background: #667eea;
+  color: #fff;
+}
+
+.review-reject {
+  background: rgba(255, 255, 255, 0.15);
+  color: #ff6b6b;
+  border: 1rpx solid rgba(255, 107, 107, 0.3);
+}
+
 .list {
   flex: 1;
   padding: 20rpx;
