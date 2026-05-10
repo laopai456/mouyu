@@ -76,6 +76,10 @@
         "value": "admin"
       },
       {
+        "type": "folder",
+        "value": ".trae"
+      },
+      {
         "type": "suffix",
         "value": ".py"
       },
