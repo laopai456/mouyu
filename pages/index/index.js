@@ -96,6 +96,8 @@ Page({
               unseen: unseen
             }
           });
+        } else {
+          console.log('获取统计失败:', res.result);
         }
       },
       fail: (err) => {
