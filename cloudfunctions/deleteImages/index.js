@@ -5,6 +5,7 @@ cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database();
 
 const DEVELOPER_OPENIDS = [
+  'ADMIN_OPENID_1_PLACEHOLDER',
   'ADMIN_OPENID_2_PLACEHOLDER'
 ];
 
