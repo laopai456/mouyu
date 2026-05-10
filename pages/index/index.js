@@ -712,6 +712,7 @@ Page({
   },
 
   onShareAppMessage() {
+    this.setData({ showActionSheet: false });
     return {
       title: '木偶鱼 - 沙雕趣图',
       path: '/pages/index/index',
