@@ -37,6 +37,7 @@ Page({
     adminContact: '',
     submitContact: '',
     isDebugMode: false,
+    showActionSheet: false,
     debugStats: {
       pending: 0,
       approved: 0,
@@ -651,6 +652,63 @@ Page({
     } else {
       wx.showToast({ title: '图片加载失败', icon: 'none' });
     }
+  },
+
+  onImageLongPress() {
+    if (!this.data.imageUrl) return;
+    this.setData({ showActionSheet: true });
+  },
+
+  hideActionSheet() {
+    this.setData({ showActionSheet: false });
+  },
+
+  saveImageToAlbum() {
+    this.setData({ showActionSheet: false });
+    const imageUrl = this.data.imageUrl;
+    if (!imageUrl) {
+      wx.showToast({ title: '没有可保存的图片', icon: 'none' });
+      return;
+    }
+    wx.showLoading({ title: '保存中...' });
+    wx.downloadFile({
+      url: imageUrl,
+      success: (res) => {
+        if (res.statusCode === 200) {
+          wx.saveImageToPhotosAlbum({
+            filePath: res.tempFilePath,
+            success: () => {
+              wx.hideLoading();
+              wx.showToast({ title: '已保存到相册', icon: 'success' });
+            },
+            fail: (err) => {
+              wx.hideLoading();
+              if (err.errMsg.indexOf('auth deny') !== -1 || err.errMsg.indexOf('authorize') !== -1) {
+                wx.showModal({
+                  title: '提示',
+                  content: '需要你授权保存图片到相册',
+                  confirmText: '去授权',
+                  success: (modalRes) => {
+                    if (modalRes.confirm) {
+                      wx.openSetting();
+                    }
+                  }
+                });
+              } else {
+                wx.showToast({ title: '保存失败', icon: 'none' });
+              }
+            }
+          });
+        } else {
+          wx.hideLoading();
+          wx.showToast({ title: '下载失败', icon: 'none' });
+        }
+      },
+      fail: () => {
+        wx.hideLoading();
+        wx.showToast({ title: '下载失败', icon: 'none' });
+      }
+    });
   },
 
   onShareAppMessage() {
