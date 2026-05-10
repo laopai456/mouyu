@@ -28,7 +28,7 @@ Page({
     isRefreshing: false,
     noMoreImages: false,
     noMoreText: '',
-    hasLikedToday: false,
+    likesToday: 0,
     canUpload: false,
     flyingTexts: [],
     laughMode: false,
@@ -123,8 +123,12 @@ Page({
     const today = new Date().toISOString().split('T')[0];
     const lastLikeDate = wx.getStorageSync('lastLikeDate');
     const laughModeUnlocked = wx.getStorageSync('laughModeUnlocked');
+    const likesToday = lastLikeDate === today
+      ? (wx.getStorageSync('likesTodayCount') || 0)
+      : 0;
     this.setData({
-      hasLikedToday: lastLikeDate === today,
+      likesToday,
+      likeCount: Math.max(0, 3 - likesToday),
       laughMode: laughModeUnlocked === today
     });
   },
@@ -270,7 +274,7 @@ Page({
       imageUrl: displayUrl,
       imageId: image._id,
       dislikeCount: remainingDislikes,
-      likeCount: image.likeCount || 0,
+      likeCount: Math.max(0, 3 - this.data.likesToday),
       noMoreImages: false,
     });
 
@@ -346,15 +350,15 @@ Page({
   },
 
   onLike() {
-    console.log('onLike 被调用', 'imageId:', this.data.imageId, 'hasLikedToday:', this.data.hasLikedToday);
+    console.log('onLike 被调用', 'imageId:', this.data.imageId, 'likesToday:', this.data.likesToday);
 
     if (!this.data.imageId) {
       console.log('imageId 为空，直接返回');
       return;
     }
 
-    if (this.data.hasLikedToday) {
-      console.log('今天已送过花，直接返回');
+    if (this.data.likesToday >= 3) {
+      console.log('今天送花次数已用完，直接返回');
       if (this.data.laughMode) {
         this.setData({ laughMode: false });
         try { wx.setStorageSync('laughModeUnlocked', ''); } catch (e) { console.warn('laughModeUnlocked写入失败', e); }
@@ -374,11 +378,13 @@ Page({
           return;
         }
         const today = new Date().toISOString().split('T')[0];
+        const newLikesToday = this.data.likesToday + 1;
         try { wx.setStorageSync('lastLikeDate', today); } catch (e) { console.warn('lastLikeDate写入失败', e); }
+        try { wx.setStorageSync('likesTodayCount', newLikesToday); } catch (e) { console.warn('likesTodayCount写入失败', e); }
         try { wx.setStorageSync('laughModeUnlocked', today); } catch (e) { console.warn('laughModeUnlocked写入失败', e); }
         this.setData({
-          likeCount: this.data.likeCount + 1,
-          hasLikedToday: true,
+          likesToday: newLikesToday,
+          likeCount: Math.max(0, 3 - newLikesToday),
           laughMode: true
         });
       },

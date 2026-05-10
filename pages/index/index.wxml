@@ -64,7 +64,7 @@
 
   <view class="header">
     <view class="header-left">
-      <view class="like-btn {{hasLikedToday ? 'disabled' : ''}}" bindtap="onLike">
+      <view class="like-btn {{likesToday >= 3 ? 'disabled' : ''}}" bindtap="onLike">
         <text class="like-icon">🌸</text>
         <text class="action-count">{{likeCount}}</text>
       </view>
