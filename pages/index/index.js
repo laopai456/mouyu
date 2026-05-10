@@ -67,7 +67,7 @@ Page({
     try {
       const accountInfo = wx.getAccountInfoSync();
       const envVersion = accountInfo.miniProgram.envVersion || 'release';
-      const isDebugMode = envVersion !== 'release';
+      const isDebugMode = envVersion === 'develop';
       this.setData({ isDebugMode });
       if (isDebugMode) {
         this.fetchDebugStats();
