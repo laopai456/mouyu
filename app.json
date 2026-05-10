@@ -10,6 +10,11 @@
     "navigationBarTitleText": "木偶鱼PF",
     "backgroundColor": "#f8f8f8"
   },
+  "permission": {
+    "scope.writePhotosAlbum": {
+      "desc": "需要你的授权保存图片到相册"
+    }
+  },
   "style": "v2",
   "sitemapLocation": "sitemap.json"
 }
