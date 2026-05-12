@@ -315,6 +315,15 @@
     .load-more:hover {
       background: #f5f5f5;
     }
+    .date-separator {
+      grid-column: 1 / -1;
+      padding: 10px 0 8px;
+      font-size: 14px;
+      font-weight: 600;
+      color: #667eea;
+      border-bottom: 1px solid #eee;
+      margin-bottom: 8px;
+    }
   </style>
 </head>
 <body>
@@ -484,6 +493,7 @@
     let gridSize = 4;
     let batchImages = [];
     let selectedMap = new Map();
+    let lastPassedDate = null;
     
     function toggleGridDropdown() {
       const menu = document.getElementById('gridDropdownMenu');
@@ -808,6 +818,7 @@
         pageState[status] = { page: 0, hasMore: true };
         listEl.innerHTML = '<div class="loading">加载中...</div>';
         previewImages = [];
+        if (status === 1) lastPassedDate = null;
       } else {
         const loadingEl = document.getElementById(`loading-more-${status}`);
         if (loadingEl) loadingEl.textContent = '加载中...';
@@ -883,7 +894,8 @@
           status: status,
           likeCount: item.likeCount || 0,
           dislikeCount: item.dislikeCount || 0,
-          createTime: item.createTime
+          createTime: item.createTime,
+          reviewTime: item.reviewTime
         }));
         
         previewImages = previewImages.concat(newImages);
@@ -908,9 +920,16 @@
         const containerEl = document.getElementById(`imageContainer-${status}`);
         const startIndex = previewImages.length - newImages.length;
 
-        const html = status === 1 ? `
-          <div class="image-grid-large">
-            ${newImages.map((item, i) => `
+        const html = status === 1 ? (() => {
+          let groupedHtml = '';
+          let prevDate = append ? lastPassedDate : null;
+          newImages.forEach((item, i) => {
+            const date = formatDateFromTimestamp(item.reviewTime || item.createTime);
+            if (date !== prevDate) {
+              groupedHtml += `<div class="date-separator">${date}</div>`;
+              prevDate = date;
+            }
+            groupedHtml += `
               <div class="grid-item-large" data-id="${item.id}">
                 <div class="checkbox-large">
                   <input type="checkbox" class="image-checkbox" data-id="${item.id}" data-status="${status}" onchange="updateSelectedCount(${status})">
@@ -921,9 +940,11 @@
                   <button class="btn btn-danger btn-small" onclick="deleteImage('${item.id}', ${status})">删除</button>
                 </div>
               </div>
-            `).join('')}
-          </div>
-        ` : `
+            `;
+          });
+          lastPassedDate = prevDate;
+          return groupedHtml;
+        })() : `
           <div class="image-grid">
             ${newImages.map((item, i) => `
               <div class="list-item" data-id="${item.id}" data-status="${status}">
@@ -953,10 +974,19 @@
           </div>
         `;
 
-        if (append) {
-          containerEl.insertAdjacentHTML('beforeend', html);
+        if (status === 1) {
+          if (append) {
+            const grid = document.getElementById('passedGrid');
+            if (grid) grid.insertAdjacentHTML('beforeend', html);
+          } else {
+            containerEl.innerHTML = `<div class="image-grid-large" id="passedGrid">${html}</div>`;
+          }
         } else {
-          containerEl.innerHTML = html;
+          if (append) {
+            containerEl.insertAdjacentHTML('beforeend', html);
+          } else {
+            containerEl.innerHTML = html;
+          }
         }
 
         const loadingEl = document.getElementById(`loading-more-${status}`);
@@ -1059,6 +1089,11 @@
     function formatTime(timestamp) {
       const d = new Date(timestamp);
       return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+    }
+    
+    function formatDateFromTimestamp(timestamp) {
+      const d = new Date(timestamp);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     }
     
     async function reviewImage(imageId, status) {
