@@ -1,0 +1,15 @@
+{
+  "schedule": {
+    "hour": 12,
+    "minute": 0,
+    "second": 0
+  },
+  "scripts": {
+    "downloader": "../tools/tdl_downloader/tdl_downloader_v2.py",
+    "uploader": "../tools/uploader/uploader.py"
+  },
+  "logging": {
+    "enabled": true,
+    "logFile": "../logs/scheduler.log"
+  }
+}

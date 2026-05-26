@@ -1,0 +1,17 @@
+{
+  "name": "mouyu-scheduler",
+  "version": "1.0.0",
+  "description": "定时任务调度器 - 每日自动运行下载器和上传器",
+  "main": "scheduler.js",
+  "scripts": {
+    "start": "node scheduler.js",
+    "start:background": "nohup node scheduler.js > scheduler.log 2>&1 &",
+    "test": "node -e \"require('./scheduler.js')\""
+  },
+  "dependencies": {
+    "node-schedule": "^2.1.1"
+  },
+  "keywords": ["scheduler", "cron", "定时任务"],
+  "author": "",
+  "license": "MIT"
+}

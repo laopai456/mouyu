@@ -105,6 +105,95 @@ exports.main = async (event, context) => {
     };
   }
 
+  if (action === 'listMonths') {
+    try {
+      const BATCH_SIZE = 100;
+      const monthMap = {};
+      let skip = 0;
+      let hasMore = true;
+
+      while (hasMore) {
+        const res = await db.collection('images')
+          .field({ yearMonth: true, status: true })
+          .skip(skip)
+          .limit(BATCH_SIZE)
+          .get();
+
+        if (res.data.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        for (const item of res.data) {
+          const ym = item.yearMonth;
+          if (!ym) continue;
+          if (!monthMap[ym]) {
+            monthMap[ym] = { total: 0, pending: 0, passed: 0, rejected: 0 };
+          }
+          monthMap[ym].total++;
+          if (item.status === 0) monthMap[ym].pending++;
+          else if (item.status === 1) monthMap[ym].passed++;
+          else if (item.status === 2) monthMap[ym].rejected++;
+        }
+
+        skip += BATCH_SIZE;
+        if (res.data.length < BATCH_SIZE) hasMore = false;
+      }
+
+      const months = Object.entries(monthMap)
+        .map(([yearMonth, stats]) => ({ yearMonth, ...stats }))
+        .sort((a, b) => b.yearMonth.localeCompare(a.yearMonth));
+
+      return { success: true, months };
+    } catch (err) {
+      console.error('listMonths 失败', err);
+      return { success: false, message: '查询月份失败', error: err };
+    }
+  }
+
+  if (action === 'deleteByMonth') {
+    const { yearMonth } = event;
+    if (!yearMonth) {
+      return { success: false, message: '缺少 yearMonth 参数' };
+    }
+
+    const BATCH_SIZE = 100;
+    let totalDeleted = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      const res = await db.collection('images')
+        .where({ yearMonth })
+        .limit(BATCH_SIZE)
+        .get();
+
+      if (res.data.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      for (const item of res.data) {
+        try {
+          await db.collection('images').doc(item._id).remove();
+          totalDeleted++;
+        } catch (err) {
+          console.error('删除失败', item._id, err);
+        }
+      }
+
+      if (res.data.length < BATCH_SIZE) {
+        hasMore = false;
+      }
+    }
+
+    return {
+      success: true,
+      yearMonth,
+      totalDeleted,
+      message: `已删除 ${yearMonth} 月份的 ${totalDeleted} 张图片`
+    };
+  }
+
   if (action === 'migrateBlacklist') {
     const now = Date.now();
     let processed = 0;

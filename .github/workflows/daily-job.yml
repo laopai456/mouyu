@@ -1,0 +1,35 @@
+name: 每日定时任务
+
+on:
+  schedule:
+    - cron: '0 16 * * *'
+  workflow_dispatch:
+
+jobs:
+  daily-task:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: 安装依赖
+        run: npm install
+
+      - name: 执行下载器
+        run: node scripts/tdldownloader.js
+        continue-on-error: true
+
+      - name: 执行上传器
+        run: node scripts/uploader.js
+        continue-on-error: true
+
+      - name: 提交更改
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'chore: 每日定时任务自动更新'
+          branch: ${{ github.head_ref || github.ref }}

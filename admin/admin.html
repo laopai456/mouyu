@@ -324,6 +324,19 @@
       border-bottom: 1px solid #eee;
       margin-bottom: 8px;
     }
+    
+    /* 按月份删除 */
+    .month-list { display: flex; flex-direction: column; gap: 12px; }
+    .month-card { background: #fafafa; border: 1px solid #eee; border-radius: 10px; padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; transition: border-color 0.2s; }
+    .month-card:hover { border-color: #667eea; }
+    .month-card .month-label { font-size: 18px; font-weight: 600; color: #333; }
+    .month-card .month-stats { display: flex; gap: 16px; font-size: 13px; color: #666; }
+    .month-card .month-stats span { display: flex; align-items: center; gap: 4px; }
+    .month-card .btn-delete-month { padding: 8px 20px; }
+    .month-confirm { text-align: center; padding: 30px; }
+    .month-confirm h3 { color: #ff6b6b; margin-bottom: 15px; }
+    .month-confirm .confirm-input { padding: 10px; border: 1px solid #ff6b6b; border-radius: 6px; font-size: 16px; width: 200px; text-align: center; margin-bottom: 15px; }
+    .month-deleting { text-align: center; padding: 20px; color: #667eea; }
   </style>
 </head>
 <body>
@@ -365,6 +378,7 @@
         <button class="tab" onclick="switchTab('pending')">待审核</button>
         <button class="tab" onclick="switchTab('passed')">已通过</button>
         <button class="tab" onclick="switchTab('rejected')">已拒绝</button>
+        <button class="tab" onclick="switchTab('monthDelete')">按月份删除</button>
       </div>
     </div>
     
@@ -471,6 +485,14 @@
               <input type="file" id="qrcodeInput" accept="image/*" style="display:none" onchange="handleQRCodeSelect(event)">
             </div>
           </div>
+        </div>
+      </div>
+
+      <div id="monthDeleteTab" class="hidden">
+        <div class="image-list">
+          <h3>按月份删除图片</h3>
+          <p style="color:#999;font-size:13px;margin-bottom:20px;">选择月份后将删除该月所有图片（包括待审核、已通过、已拒绝），操作不可撤销。</p>
+          <div id="monthListContainer"><div class="loading">加载中...</div></div>
         </div>
       </div>
     </div>
@@ -1246,6 +1268,7 @@
       document.getElementById('passedTab').classList.add('hidden');
       document.getElementById('rejectedTab').classList.add('hidden');
       document.getElementById('qrcodeTab').classList.add('hidden');
+      document.getElementById('monthDeleteTab').classList.add('hidden');
       
       if (tab === 'upload') {
         document.getElementById('uploadTab').classList.remove('hidden');
@@ -1261,6 +1284,9 @@
       } else if (tab === 'qrcode') {
         document.getElementById('qrcodeTab').classList.remove('hidden');
         loadQRCode();
+      } else if (tab === 'monthDelete') {
+        document.getElementById('monthDeleteTab').classList.remove('hidden');
+        loadMonthList();
       }
     }
     
@@ -1665,6 +1691,97 @@
       } catch (err) {
         console.error('保存失败', err);
       }
+    }
+    
+    async function loadMonthList() {
+      const container = document.getElementById('monthListContainer');
+      container.innerHTML = '<div class="loading">加载中...</div>';
+
+      try {
+        const res = await app.callFunction({
+          name: 'deleteImages',
+          data: { action: 'listMonths', adminOpenid: currentUser.openid }
+        });
+
+        if (!res.result || !res.result.success) {
+          container.innerHTML = '<div class="empty">加载失败: ' + (res.result?.message || '未知错误') + '</div>';
+          return;
+        }
+
+        const months = res.result.months || [];
+
+        if (months.length === 0) {
+          container.innerHTML = '<div class="empty">暂无图片数据</div>';
+          return;
+        }
+
+        container.innerHTML = `
+          <div class="month-list">
+            ${months.map(m => `
+              <div class="month-card" id="month-card-${m.yearMonth}">
+                <div>
+                  <div class="month-label">${m.yearMonth}</div>
+                  <div class="month-stats">
+                    <span>共 ${m.total} 张</span>
+                    <span>待审核 ${m.pending}</span>
+                    <span>已通过 ${m.passed}</span>
+                    <span>已拒绝 ${m.rejected}</span>
+                  </div>
+                </div>
+                <button class="btn btn-danger btn-delete-month" onclick="showMonthConfirm('${m.yearMonth}')">删除该月</button>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      } catch (err) {
+        console.error('加载月份列表失败', err);
+        container.innerHTML = '<div class="empty">加载失败</div>';
+      }
+    }
+
+    function showMonthConfirm(yearMonth) {
+      const card = document.getElementById('month-card-' + yearMonth);
+      card.innerHTML = `
+        <div class="month-confirm" style="flex:1;text-align:center;">
+          <h3>确认删除 ${yearMonth} 月份所有图片？</h3>
+          <p style="color:#666;margin-bottom:15px;">此操作不可撤销，请输入 <strong>${yearMonth}</strong> 确认</p>
+          <input type="text" class="confirm-input" id="confirmInput-${yearMonth}" placeholder="输入 ${yearMonth}">
+          <div style="display:flex;gap:10px;justify-content:center;">
+            <button class="btn btn-danger" onclick="deleteByMonth('${yearMonth}')">确认删除</button>
+            <button class="btn" onclick="loadMonthList()">取消</button>
+          </div>
+        </div>
+      `;
+    }
+
+    async function deleteByMonth(yearMonth) {
+      const input = document.getElementById('confirmInput-' + yearMonth);
+      if (!input || input.value.trim() !== yearMonth) {
+        alert('请输入正确的月份格式: ' + yearMonth);
+        return;
+      }
+
+      const card = document.getElementById('month-card-' + yearMonth);
+      card.innerHTML = '<div class="month-deleting" style="flex:1;">删除中，请稍候...</div>';
+
+      try {
+        const res = await app.callFunction({
+          name: 'deleteImages',
+          data: { action: 'deleteByMonth', yearMonth, adminOpenid: currentUser.openid }
+        });
+
+        if (res.result && res.result.success) {
+          alert(res.result.message);
+        } else {
+          alert('删除失败: ' + (res.result?.message || '未知错误'));
+        }
+      } catch (err) {
+        console.error('按月份删除失败', err);
+        alert('删除失败: ' + err.message);
+      }
+
+      loadMonthList();
+      loadStats();
     }
     
     init();
