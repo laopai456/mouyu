@@ -411,7 +411,7 @@
           <div class="pending-header">
             <h3>待审核图片 <span id="pendingCountBadge"></span></h3>
             <div class="batch-review-actions" id="batchReviewActions">
-              <button class="btn btn-danger" onclick="batchRejectUnchecked()">一键删除未勾选</button>
+              <button class="btn btn-primary" onclick="toggleSelectAllGrid()">全选</button>
               <button class="btn btn-success" onclick="batchApproveChecked()">勾选通过，未勾选删除</button>
             </div>
             <div class="mode-switch">
@@ -772,6 +772,13 @@
     function toggleCheckbox(imageId) {
       const current = selectedMap.get(imageId) || false;
       selectedMap.set(imageId, !current);
+      renderBatchGrid();
+    }
+    
+    function toggleSelectAllGrid() {
+      const allSelected = batchImages.every(img => selectedMap.get(img._id));
+      const newValue = !allSelected;
+      batchImages.forEach(img => selectedMap.set(img._id, newValue));
       renderBatchGrid();
     }
     
@@ -1765,19 +1772,12 @@
       card.innerHTML = '<div class="month-deleting" style="flex:1;">删除中，请稍候...</div>';
 
       try {
-        const res = await app.callFunction({
+        await app.callFunction({
           name: 'deleteImages',
           data: { action: 'deleteByMonth', yearMonth, adminOpenid: currentUser.openid }
         });
-
-        if (res.result && res.result.success) {
-          alert(res.result.message);
-        } else {
-          alert('删除失败: ' + (res.result?.message || '未知错误'));
-        }
       } catch (err) {
         console.error('按月份删除失败', err);
-        alert('删除失败: ' + err.message);
       }
 
       loadMonthList();
