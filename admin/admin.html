@@ -835,7 +835,7 @@
       if (img) {
         previewImages = batchImages;
         previewIndex = batchImages.findIndex(i => i._id === imageId);
-        showPreview();
+        updatePreviewModal();
       }
     }
     
@@ -1148,15 +1148,19 @@
       const modalImg = document.getElementById('modalImage');
       const modalInfo = document.getElementById('modalInfo');
       const modalActions = document.getElementById('modalActions');
-      
+
       const current = previewImages[previewIndex];
       if (!current) return;
-      
-      modalImg.src = current.url;
-      modalInfo.textContent = `${previewIndex + 1} / ${previewImages.length} | 🌸 ${current.likeCount} | 💩 ${current.dislikeCount}`;
-      
+
+      const displayUrl = current._displayUrl || current.url;
+      const imageId = current._id || current.id;
+      const status = current.status !== undefined ? current.status : 0;
+
+      modalImg.src = displayUrl;
+      modalInfo.textContent = `${previewIndex + 1} / ${previewImages.length} | 🌸 ${current.likeCount || 0} | 💩 ${current.dislikeCount || 0}`;
+
       let actionsHtml = '';
-      if (current.status === 0) {
+      if (status === 0) {
         actionsHtml = `
           <button class="btn btn-success" onclick="reviewFromPreview(1)">通过</button>
           <button class="btn btn-danger" onclick="reviewFromPreview(2)">拒绝</button>
@@ -1165,7 +1169,7 @@
         actionsHtml = `<button class="btn btn-danger" onclick="deleteFromPreview()">删除</button>`;
       }
       modalActions.innerHTML = actionsHtml;
-      
+
       modal.style.display = 'block';
     }
     
@@ -1186,59 +1190,64 @@
     async function reviewFromPreview(newStatus) {
       const current = previewImages[previewIndex];
       if (!current) return;
-      
+      const imageId = current._id || current.id;
+
       try {
         await app.callFunction({
           name: 'admin',
-          data: { action: 'review', imageId: current.id, status: newStatus, adminOpenid: currentUser.openid }
+          data: { action: 'review', imageId, status: newStatus, adminOpenid: currentUser.openid }
         });
-        
+
         previewImages.splice(previewIndex, 1);
-        
+
         if (previewImages.length === 0) {
           closeModal();
-          loadImages(0);
+          loadBatchImages();
           loadStats();
         } else {
           if (previewIndex >= previewImages.length) {
             previewIndex = previewImages.length - 1;
           }
           updatePreviewModal();
-          loadImages(0);
+          loadBatchImages();
           loadStats();
         }
       } catch (err) {
         console.error('操作失败', err);
       }
     }
-    
+
     async function deleteFromPreview() {
       const current = previewImages[previewIndex];
       if (!current) return;
-      
+      const imageId = current._id || current.id;
+      const status = current.status !== undefined ? current.status : 0;
+
       try {
         const result = await app.callFunction({
           name: 'deleteImages',
           data: {
             action: 'batchDelete',
-            imageIds: [current.id],
+            imageIds: [imageId],
             adminOpenid: currentUser.openid
           }
         });
-        
+
         if (result.result && result.result.success) {
           previewImages.splice(previewIndex, 1);
-          
+
           if (previewImages.length === 0) {
             closeModal();
-            loadImages(current.status);
+            if (status === 0) loadBatchImages();
+            else loadImages(status);
             loadStats();
           } else {
             if (previewIndex >= previewImages.length) {
               previewIndex = previewImages.length - 1;
             }
             updatePreviewModal();
-            loadImages(current.status);
+            if (status === 0) loadBatchImages();
+            else loadImages(status);
             loadStats();
           }
         }

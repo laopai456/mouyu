@@ -4,27 +4,22 @@ import time
 import json
 import hashlib
 import logging
-import threading
 import io
 from datetime import datetime
 from pathlib import Path
 from PIL import Image
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
 from qcloud_cos import CosConfig
 from qcloud_cos import CosS3Client
 from tencentcloud.common import credential
 from tencentcloud.scf.v20180416 import scf_client, models
 
-class ImageUploader(FileSystemEventHandler):
+class ImageUploader:
     def __init__(self, config):
         self.config = config
         self.env_id = config['env_id']
         self.developer_openid = config['developer_openid']
         self.md5_cache_file = Path(__file__).parent / 'cache' / 'md5_cache.json'
         self.md5_cache = self.load_md5_cache()
-        self.processing_files = set()
-        self.processing_lock = threading.Lock()
         self.setup_logging()
         self.setup_cos_client()
         
@@ -81,27 +76,6 @@ class ImageUploader(FileSystemEventHandler):
         self.md5_cache_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.md5_cache_file, 'w', encoding='utf-8') as f:
             json.dump(self.md5_cache, f, ensure_ascii=False, indent=2)
-    
-    def on_created(self, event):
-        if event.is_directory:
-            return
-        
-        file_path = event.src_path
-        if self.is_image(file_path):
-            with self.processing_lock:
-                if file_path in self.processing_files:
-                    self.logger.info(f"文件正在处理中，跳过: {file_path}")
-                    return
-                self.processing_files.add(file_path)
-            
-            self.logger.info(f"检测到新图片: {file_path}")
-            threading.Thread(target=self._upload_with_delay, args=(file_path,), daemon=True).start()
-    
-    def _upload_with_delay(self, file_path):
-        time.sleep(self.config['upload_delay'])
-        self.upload_image(file_path)
-        with self.processing_lock:
-            self.processing_files.discard(file_path)
     
     def is_image(self, file_path):
         ext = Path(file_path).suffix.lower().lstrip('.')
@@ -182,7 +156,11 @@ class ImageUploader(FileSystemEventHandler):
             md5 = self.calculate_md5(file_path)
             
             if md5 in self.md5_cache:
-                self.logger.info(f"重复图片，跳过: {file_path}")
+                self.logger.info(f"重复图片，删除本地文件: {file_path}")
+                try:
+                    os.remove(file_path)
+                except Exception as e:
+                    self.logger.error(f"删除重复图片失败: {e}")
                 return
             
             self.logger.info(f"开始上传: {file_path}")
@@ -328,7 +306,6 @@ def main():
     print()
     
     event_handler = ImageUploader(config)
-    observer = Observer()
     
     has_valid_folder = False
     for folder in config['watch_folders']:
@@ -336,8 +313,7 @@ def main():
             watch_path = folder['path']
             print(f"检查文件夹: {watch_path}")
             if os.path.exists(watch_path):
-                observer.schedule(event_handler, watch_path, recursive=True)
-                print(f"  ✓ 已添加监控")
+                print(f"  ✓ 文件夹有效")
                 has_valid_folder = True
             else:
                 print(f"  ✗ 文件夹不存在")
@@ -345,11 +321,9 @@ def main():
     print()
     
     if not has_valid_folder:
-        print("错误: 没有有效的监控文件夹")
+        print("错误: 没有有效的文件夹")
         input("按回车键退出...")
         return
-    
-    observer.start()
     
     print("="*50)
     print("扫描现有图片...")
@@ -370,22 +344,9 @@ def main():
                 print(f"  共找到 {image_count} 张图片")
     
     print("\n" + "="*50)
-    print("✓ 自动上传工具已启动")
-    print("="*50)
-    print("监控中... (按 Ctrl+C 停止)")
+    print("✓ 自动上传完成")
     print("="*50)
     print()
-    
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\n正在停止...")
-        observer.stop()
-    
-    observer.join()
-    print("已停止")
-    input("按回车键退出...")
 
 if __name__ == "__main__":
     main()
