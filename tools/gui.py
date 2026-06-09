@@ -165,7 +165,9 @@ class App:
         global running_process
         with process_lock:
             if running_process and running_process.poll() is None:
-                running_process.terminate()
+                running_process.kill()
+                running_process.wait(timeout=3)
+                running_process = None
                 self.log_write("\n⏹ 已手动停止\n")
         self.current_action = None
         self.dl_btn.config(text="⬇ 开始下载", state=tk.NORMAL)
@@ -255,11 +257,12 @@ class App:
         global running_process
         with process_lock:
             if running_process and running_process.poll() is None:
-                running_process.terminate()
+                running_process.kill()
                 try:
-                    running_process.wait(timeout=5)
+                    running_process.wait(timeout=3)
                 except subprocess.TimeoutExpired:
-                    running_process.kill()
+                    pass
+                running_process = None
         self.root.destroy()
 
     def run(self):
