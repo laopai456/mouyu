@@ -15,3 +15,7 @@ tools/telegram-parser/**/__pycache__/
 TelegramStorageParser/
 
 .vscode/
+
+# PyInstaller build artifacts
+build/
+*.spec
