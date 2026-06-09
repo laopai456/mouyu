@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import platform
+import signal
 from pathlib import Path
 
 # ── 路径配置（兼容 .py 和 .exe 运行）──
@@ -161,14 +162,30 @@ class App:
             else:
                 self.start_upload()
 
-    def stop_process(self):
+    def _kill_tree(self):
+        """强制终止进程树（包括 tdl 等孙进程）"""
         global running_process
         with process_lock:
             if running_process and running_process.poll() is None:
-                running_process.kill()
-                running_process.wait(timeout=3)
+                pid = running_process.pid
+                # Windows: taskkill /T 杀整个进程树
+                if platform.system() == "Windows":
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(pid)],
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                        capture_output=True,
+                    )
+                else:
+                    running_process.kill()
+                try:
+                    running_process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    pass
                 running_process = None
-                self.log_write("\n⏹ 已手动停止\n")
+
+    def stop_process(self):
+        self._kill_tree()
+        self.log_write("\n⏹ 已手动停止\n")
         self.current_action = None
         self.dl_btn.config(text="⬇ 开始下载", state=tk.NORMAL)
         self.ul_btn.config(text="⬆ 开始上传", state=tk.NORMAL)
@@ -204,7 +221,9 @@ class App:
                         errors="replace",
                         bufsize=1,
                         env=env,
-                        creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0,
+                        creationflags=(
+                            subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+                        ) if platform.system() == "Windows" else 0,
                     )
                     running_process = p
 
@@ -254,15 +273,7 @@ class App:
     # ── 关闭 ──
 
     def on_close(self):
-        global running_process
-        with process_lock:
-            if running_process and running_process.poll() is None:
-                running_process.kill()
-                try:
-                    running_process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    pass
-                running_process = None
+        self._kill_tree()
         self.root.destroy()
 
     def run(self):
