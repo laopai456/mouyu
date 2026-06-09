@@ -151,6 +151,8 @@ class App:
             global process
             try:
                 with process_lock:
+                    env = os.environ.copy()
+                    env["PYTHONIOENCODING"] = "utf-8"
                     p = subprocess.Popen(
                         cmd,
                         stdout=subprocess.PIPE,
@@ -159,6 +161,7 @@ class App:
                         encoding="utf-8",
                         errors="replace",
                         bufsize=1,
+                        env=env,
                         creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0,
                     )
                     process = p
