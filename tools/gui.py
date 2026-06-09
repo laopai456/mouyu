@@ -7,6 +7,7 @@ import threading
 import json
 import os
 import sys
+import platform
 from pathlib import Path
 
 # ── 路径配置（兼容 .py 和 .exe 运行）──
@@ -158,6 +159,7 @@ class App:
                         encoding="utf-8",
                         errors="replace",
                         bufsize=1,
+                        creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0,
                     )
                     process = p
 
