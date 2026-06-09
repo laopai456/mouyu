@@ -29,7 +29,7 @@ DOWNLOADER_PROGRESS = EXE_DIR / "tools" / "tdl_downloader" / "cache" / "progress
 
 INCLUDE_TYPES = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
 
-process: subprocess.Popen | None = None
+running_process: subprocess.Popen | None = None
 process_lock = threading.Lock()
 
 
@@ -63,6 +63,9 @@ class App:
         self.root.geometry("800x600")
         self.root.minsize(600, 400)
 
+        # 当前运行状态: None | "download" | "upload"
+        self.current_action: str | None = None
+
         # 样式
         style = ttk.Style()
         style.theme_use("vista")
@@ -80,13 +83,13 @@ class App:
         self.ul_count_label.pack(side=tk.LEFT)
 
         # ─ 按钮区 ─
-        btn_frame = ttk.Frame(self.root, padding=12)
+        btn_frame = ttk.Frame(self.root, padding=(12, 0, 12, 6))
         btn_frame.pack(fill=tk.X)
 
-        self.dl_btn = ttk.Button(btn_frame, text="⬇ 开始下载", command=self.start_download, width=16)
+        self.dl_btn = ttk.Button(btn_frame, text="⬇ 开始下载", command=lambda: self.toggle_action("download"), width=16)
         self.dl_btn.pack(side=tk.LEFT, padx=(0, 10))
 
-        self.ul_btn = ttk.Button(btn_frame, text="⬆ 开始上传", command=self.start_upload, width=16)
+        self.ul_btn = ttk.Button(btn_frame, text="⬆ 开始上传", command=lambda: self.toggle_action("upload"), width=16)
         self.ul_btn.pack(side=tk.LEFT, padx=(0, 20))
 
         # 清理缓存复选框
@@ -95,6 +98,13 @@ class App:
             btn_frame, text="下载前清理缓存", variable=self.clean_cache_var
         )
         self.clean_cache_cb.pack(side=tk.LEFT)
+
+        # 第二行按钮区
+        btn_row2 = ttk.Frame(self.root, padding=(12, 0, 12, 12))
+        btn_row2.pack(fill=tk.X)
+
+        self.copy_log_btn = ttk.Button(btn_row2, text="📋 复制日志", command=self.copy_log, width=16)
+        self.copy_log_btn.pack(side=tk.LEFT)
 
         # ─ 日志区 ─
         log_frame = ttk.Frame(self.root, padding=(12, 0, 12, 12))
@@ -122,6 +132,15 @@ class App:
         self.log.config(state=tk.DISABLED)
         self.root.update_idletasks()
 
+    # ── 复制日志 ──
+
+    def copy_log(self):
+        content = self.log.get("1.0", tk.END)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(content)
+        self.copy_log_btn.config(text="✅ 已复制")
+        self.root.after(2000, lambda: self.copy_log_btn.config(text="📋 复制日志"))
+
     # ── 计数刷新 ──
 
     def refresh_counts(self):
@@ -129,26 +148,47 @@ class App:
         self.ul_count_label.config(text=str(get_upload_count()))
         self.root.after(5000, self.refresh_counts)
 
-    # ── 按钮状态 ──
+    # ── 按钮切换 ──
 
-    def set_buttons_enabled(self, enabled: bool):
-        state = tk.NORMAL if enabled else tk.DISABLED
-        self.dl_btn.config(state=state)
-        self.ul_btn.config(state=state)
+    def toggle_action(self, action: str):
+        if self.current_action == action:
+            # 正在运行 → 停止
+            self.stop_process()
+        else:
+            # 空闲 → 启动
+            if action == "download":
+                self.start_download()
+            else:
+                self.start_upload()
+
+    def stop_process(self):
+        global running_process
+        with process_lock:
+            if running_process and running_process.poll() is None:
+                running_process.terminate()
+                self.log_write("\n⏹ 已手动停止\n")
+        self.current_action = None
+        self.dl_btn.config(text="⬇ 开始下载", state=tk.NORMAL)
+        self.ul_btn.config(text="⬆ 开始上传", state=tk.NORMAL)
 
     # ── 运行子进程 ──
 
-    def run_subprocess(self, cmd: list[str], desc: str):
-        global process
+    def run_subprocess(self, cmd: list[str], desc: str, action: str):
+        global running_process
         self.log_write(f"{'=' * 50}\n")
         self.log_write(f"{desc}\n")
         self.log_write(f"{' '.join(cmd)}\n")
         self.log_write(f"{'=' * 50}\n")
 
-        self.set_buttons_enabled(False)
+        # 切换按钮状态
+        self.current_action = action
+        btn = self.dl_btn if action == "download" else self.ul_btn
+        other_btn = self.ul_btn if action == "download" else self.dl_btn
+        btn.config(text="⏹ 停止", state=tk.NORMAL)
+        other_btn.config(state=tk.DISABLED)
 
         def worker():
-            global process
+            global running_process
             try:
                 with process_lock:
                     env = os.environ.copy()
@@ -164,7 +204,7 @@ class App:
                         env=env,
                         creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0,
                     )
-                    process = p
+                    running_process = p
 
                 for line in p.stdout:
                     self.log_write(line)
@@ -172,7 +212,8 @@ class App:
                 p.wait()
 
                 with process_lock:
-                    process = None
+                    if running_process == p:
+                        running_process = None
 
                 if p.returncode == 0:
                     self.log_write(f"\n✓ {desc}完成\n")
@@ -181,40 +222,44 @@ class App:
             except Exception as e:
                 self.log_write(f"\n✗ 错误: {e}\n")
             finally:
-                self.root.after(0, self.set_buttons_enabled, True)
-                self.root.after(0, self.refresh_counts)
+                self.root.after(0, self.set_buttons_idle)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def set_buttons_idle(self):
+        self.current_action = None
+        self.dl_btn.config(text="⬇ 开始下载", state=tk.NORMAL)
+        self.ul_btn.config(text="⬆ 开始上传", state=tk.NORMAL)
+        self.root.after(0, self.refresh_counts)
 
     # ── 下载 ──
 
     def start_download(self):
-        # 勾选了清理缓存
         if self.clean_cache_var.get():
             for f in [DOWNLOADER_CACHE, DOWNLOADER_PROGRESS]:
                 if f.exists():
                     f.unlink()
                     self.log_write(f"已清理: {f.name}\n")
         cmd = [str(VENV_PYTHON), str(DOWNLOADER_SCRIPT), "--auto"]
-        self.run_subprocess(cmd, "下载图片")
+        self.run_subprocess(cmd, "下载图片", "download")
 
     # ── 上传 ──
 
     def start_upload(self):
         cmd = [str(VENV_PYTHON), str(UPLOADER_SCRIPT)]
-        self.run_subprocess(cmd, "上传图片")
+        self.run_subprocess(cmd, "上传图片", "upload")
 
     # ── 关闭 ──
 
     def on_close(self):
-        global process
+        global running_process
         with process_lock:
-            if process and process.poll() is None:
-                process.terminate()
+            if running_process and running_process.poll() is None:
+                running_process.terminate()
                 try:
-                    process.wait(timeout=5)
+                    running_process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    process.kill()
+                    running_process.kill()
         self.root.destroy()
 
     def run(self):
