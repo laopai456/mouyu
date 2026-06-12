@@ -381,7 +381,7 @@ def filter_and_download(
     # --continue 容易因残留 .tdl 缓存导致卡住，去掉
     # -t 4 并发下载加速
     cmd = [TDL_PATH, "dl", "-f", filtered_file, "-d", download_dir,
-           "--proxy", PROXY, "--skip-same", "-t", "4"]
+           "--proxy", PROXY, "--skip-same", "-t", "2"]
     dl_ok = run_cmd(cmd, f"下载 {channel} 的 {len(filtered)} 张图片到 {download_dir}", target_dir=download_dir)
 
     if not dl_ok:
@@ -457,12 +457,15 @@ def main() -> None:
 
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-    # 清理上次打断遗留的 filtered.json，避免 tdl 卡住
+    # 清理上次中断遗留的残留文件（export/filtered/tdl缓存）
     for f in os.listdir(DOWNLOAD_DIR):
-        if f.endswith(".filtered.json"):
+        if f.endswith(".filtered.json") or f.endswith("_export.json") or f.startswith(".tdl"):
             path = os.path.join(DOWNLOAD_DIR, f)
-            os.remove(path)
-            print(f"清理残留文件: {path}")
+            try:
+                os.remove(path)
+                print(f"清理残留文件: {path}")
+            except OSError:
+                pass
 
     md5_cache = load_json_cache(MD5_CACHE_FILE)
     progress_cache = load_json_cache(PROGRESS_CACHE_FILE)
