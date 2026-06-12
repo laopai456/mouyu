@@ -378,8 +378,10 @@ def filter_and_download(
         if already_exist:
             print(f"其中 {len(already_exist)} 张已存在，需下载 {len(pending_filenames) - len(already_exist)} 张")
 
+    # --continue 容易因残留 .tdl 缓存导致卡住，去掉
+    # -t 4 并发下载加速
     cmd = [TDL_PATH, "dl", "-f", filtered_file, "-d", download_dir,
-           "--proxy", PROXY, "--skip-same", "--continue"]
+           "--proxy", PROXY, "--skip-same", "-t", "4"]
     dl_ok = run_cmd(cmd, f"下载 {channel} 的 {len(filtered)} 张图片到 {download_dir}", target_dir=download_dir)
 
     if not dl_ok:
