@@ -533,12 +533,6 @@ def main() -> None:
 
     print("\n\n完成!")
 
-    response = input("\n是否打开审核页面? (Y/n): ").strip().lower()
-    if response != "n":
-        import webbrowser
-        webbrowser.open(ADMIN_URL)
-        print(f"已打开审核页面: {ADMIN_URL}")
-
 
 if __name__ == "__main__":
     main()

@@ -9,6 +9,7 @@ import os
 import sys
 import platform
 import signal
+import webbrowser
 from pathlib import Path
 
 # ── 路径配置（兼容 .py 和 .exe 运行）──
@@ -29,6 +30,7 @@ DOWNLOADER_CACHE = EXE_DIR / "tools" / "tdl_downloader" / "cache" / "md5_cache.j
 DOWNLOADER_PROGRESS = EXE_DIR / "tools" / "tdl_downloader" / "cache" / "progress_cache.json"
 
 INCLUDE_TYPES = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
+ADMIN_URL = "https://MOYU_ENV_ID_PLACEHOLDER-1414730090.tcloudbaseapp.com/admin.html"
 
 running_process: subprocess.Popen | None = None
 process_lock = threading.Lock()
@@ -105,7 +107,10 @@ class App:
         btn_row2.pack(fill=tk.X)
 
         self.copy_log_btn = ttk.Button(btn_row2, text="📋 复制日志", command=self.copy_log, width=16)
-        self.copy_log_btn.pack(side=tk.LEFT)
+        self.copy_log_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.admin_btn = ttk.Button(btn_row2, text="🔍 打开审核", command=self.open_admin, width=16)
+        self.admin_btn.pack(side=tk.LEFT)
 
         # ─ 日志区 ─
         log_frame = ttk.Frame(self.root, padding=(12, 0, 12, 12))
@@ -141,6 +146,13 @@ class App:
         self.root.clipboard_append(content)
         self.copy_log_btn.config(text="✅ 已复制")
         self.root.after(2000, lambda: self.copy_log_btn.config(text="📋 复制日志"))
+
+    # ── 打开审核页面 ──
+
+    def open_admin(self):
+        webbrowser.open(ADMIN_URL)
+        self.admin_btn.config(text="✅ 已打开")
+        self.root.after(2000, lambda: self.admin_btn.config(text="🔍 打开审核"))
 
     # ── 计数刷新 ──
 
