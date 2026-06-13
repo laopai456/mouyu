@@ -451,8 +451,14 @@ def check_tdl_login() -> bool:
             print("✓ tdl 已登录")
             return True
         else:
-            print("✗ tdl 未登录，请先执行登录")
-            print("  命令: tdl login --proxy socks5://127.0.0.1:17891")
+            combined = (result.stdout + result.stderr).strip()
+            if "login" in combined.lower() or "auth" in combined.lower():
+                print("✗ tdl 未登录，请先执行登录")
+                print("  命令: tdl login --proxy socks5://127.0.0.1:17891")
+            else:
+                print(f"✗ tdl 连接失败 (返回码 {result.returncode})")
+                print(f"  输出: {combined or '(无输出)'}")
+                print("  可能是代理不通或 Telegram 限速，请稍后重试")
             return False
     except Exception as e:
         print(f"✗ 检查登录状态失败: {e}")
