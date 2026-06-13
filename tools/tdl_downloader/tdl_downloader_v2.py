@@ -47,6 +47,7 @@ MD5_CHUNK_SIZE = 8192
 SEQUENTIAL_GROUP_MIN = 3
 DISCOVER_SAMPLE_LIMIT = 50
 DISCOVER_MIN_FORWARDS = 3
+ADMIN_URL = "https://MOYU_ENV_ID_PLACEHOLDER-1414730090.tcloudbaseapp.com/admin.html"
 
 
 def load_json_cache(filepath: Path) -> dict:
@@ -531,6 +532,10 @@ def main() -> None:
             os.remove(export_file)
 
     print("\n\n完成!")
+
+    import webbrowser
+    webbrowser.open(ADMIN_URL)
+    print(f"已打开审核页面: {ADMIN_URL}")
 
 
 if __name__ == "__main__":
