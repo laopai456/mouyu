@@ -36,6 +36,12 @@ CMD_TIMEOUT = 600
 NO_OUTPUT_TIMEOUT = 60
 NO_OUTPUT_TIMEOUT_RETRY = 15
 MAX_STUCK_COUNT = 2
+TDL_IGNORE_PATTERNS = [
+    "WARN: Export only generates",
+    "Occasional suspensions",
+    "Type:",
+    "Input:",
+]
 MAX_RETRIES = 3
 MD5_CHUNK_SIZE = 8192
 SEQUENTIAL_GROUP_MIN = 3
@@ -85,7 +91,11 @@ def calculate_md5(file_path: str) -> str:
 def _read_process_output(process: subprocess.Popen, output_lines: list, state: dict) -> None:
     try:
         for line in process.stdout:
-            if line.strip():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if any(p in stripped for p in TDL_IGNORE_PATTERNS):
+                continue
                 output_lines.append(line)
                 if '(' in line and ')' in line:
                     parts = line.split('(')
