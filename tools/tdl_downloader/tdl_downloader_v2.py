@@ -117,7 +117,6 @@ def _kill_tdl_processes() -> None:
 def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None) -> bool:
     print(f"\n{'=' * 50}")
     print(f"{desc}")
-    print(f"执行命令: {' '.join(cmd)}")
     print(f"{'=' * 50}")
 
     for attempt in range(MAX_RETRIES):
@@ -203,10 +202,15 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None) ->
             continue
 
         if output_lines:
-            tail = 20 if process.returncode != 0 else 10
-            print(f"\n命令输出 ({len(output_lines)} 行，显示最后 {min(tail, len(output_lines))} 行):")
-            for line in output_lines[-tail:]:
-                print(f"  {line.strip()}")
+            if process.returncode != 0:
+                print(f"\n命令输出 ({len(output_lines)} 行):")
+                for line in output_lines:
+                    print(f"  {line.strip()}")
+            else:
+                tail = 10
+                print(f"\n命令输出 ({len(output_lines)} 行，显示最后 {min(tail, len(output_lines))} 行):")
+                for line in output_lines[-tail:]:
+                    print(f"  {line.strip()}")
 
         if process.returncode == 0:
             return True
