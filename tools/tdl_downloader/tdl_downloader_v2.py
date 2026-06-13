@@ -445,7 +445,7 @@ def check_tdl_login() -> bool:
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=30,
+            timeout=60,
         )
         if result.returncode == 0:
             print("✓ tdl 已登录")
