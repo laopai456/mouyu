@@ -221,6 +221,8 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None) ->
                 print(f"\n命令输出 ({len(output_lines)} 行，显示最后 {min(tail, len(output_lines))} 行):")
                 for line in output_lines[-tail:]:
                     print(f"  {line.strip()}")
+        elif process.returncode != 0:
+            print(f"\ntdl 无任何输出就退出了 (返回码 {process.returncode})，可能代理不通或 Telegram 限速")
 
         if process.returncode == 0:
             return True
