@@ -36,11 +36,14 @@ CMD_TIMEOUT = 600
 NO_OUTPUT_TIMEOUT = 60
 NO_OUTPUT_TIMEOUT_RETRY = 15
 MAX_STUCK_COUNT = 2
+# 文件数达到预期后，再等待多少秒让 tdl 自然退出，超时则强制终止
+FINISH_WAIT_TIMEOUT = 30
 TDL_IGNORE_PATTERNS = [
     "WARN: Export only generates",
     "Occasional suspensions",
-    "Type:",
-    "Input:",
+    "CPU:",
+    "Memory:",
+    "Goroutines:",
 ]
 MAX_RETRIES = 3
 MD5_CHUNK_SIZE = 8192
@@ -97,11 +100,11 @@ def _read_process_output(process: subprocess.Popen, output_lines: list, state: d
                 continue
             if any(p in stripped for p in TDL_IGNORE_PATTERNS):
                 continue
-                output_lines.append(line)
-                if '(' in line and ')' in line:
-                    parts = line.split('(')
-                    if len(parts) > 1:
-                        state["channel_name"] = parts[0].strip()
+            output_lines.append(line)
+            if '(' in line and ')' in line:
+                parts = line.split('(')
+                if len(parts) > 1:
+                    state["channel_name"] = parts[0].strip()
     except (OSError, ValueError):
         pass
 
@@ -125,7 +128,7 @@ def _kill_tdl_processes() -> None:
         pass
 
 
-def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None) -> bool:
+def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None, expected_count: int = 0) -> bool:
     print(f"\n{'=' * 50}")
     print(f"{desc}")
     print(f"{'=' * 50}")
@@ -143,9 +146,10 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None) ->
                     except OSError:
                         pass
 
+        # tdl dl 不需要 stdin 交互，用 DEVNULL 避免意外写入导致崩溃
         process = subprocess.Popen(
             cmd,
-            stdin=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -169,6 +173,8 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None) ->
 
         last_output_len = 0
         last_output_time = time.time()
+        last_file_count_time = time.time()
+        finish_time = None  # 文件数达到预期时记录时间
         stuck_count = 0
         should_break = False
 
@@ -182,7 +188,20 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None) ->
                     download_count = new_count
                     print(f"  {state['channel_name']}: 第{download_count}张 done")
                     last_output_time = time.time()
+                    last_file_count_time = time.time()
                     stuck_count = 0
+                    # 达到预期文件数，开始倒计时等待 tdl 自然退出
+                    if expected_count > 0 and download_count >= expected_count and finish_time is None:
+                        print(f"已下载 {download_count} 张（预期 {expected_count} 张），等待 tdl 退出...")
+                        finish_time = time.time()
+
+            # 文件数已达标，给 tdl FINISH_WAIT_TIMEOUT 秒自然退出
+            if finish_time and time.time() - finish_time > FINISH_WAIT_TIMEOUT:
+                print(f"文件已全部下载，tdl 未在 {FINISH_WAIT_TIMEOUT} 秒内退出，强制终止")
+                process.terminate()
+                process.wait(5)
+                # 下载已完成，视为成功
+                return True
 
             current_len = len(output_lines)
             if current_len > last_output_len:
@@ -190,9 +209,10 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None) ->
                 last_output_time = time.time()
                 stuck_count = 0
             elif time.time() - last_output_time > current_no_output_timeout:
+                # tdl 不接受 stdin 输入，不再发送 "y\n"
+                # 仅基于文件数增长和 stdout 输出判断是否卡住
                 stuck_count += 1
                 print(f"\n{current_no_output_timeout}秒无输出，可能卡住 ({stuck_count}/{MAX_STUCK_COUNT})...")
-                _send_stdin(process, "y\n")
                 last_output_time = time.time()
                 if stuck_count >= MAX_STUCK_COUNT:
                     print(f"连续{stuck_count}次卡住，终止并重启...")
@@ -396,10 +416,12 @@ def filter_and_download(
             print(f"其中 {len(already_exist)} 张已存在，需下载 {len(pending_filenames) - len(already_exist)} 张")
 
     # --continue 容易因残留 .tdl 缓存导致卡住，去掉
-    # -t 4 并发下载加速
+    # -t 2 并发下载（不要设太大，避免触发 Telegram 限速）
+    need_download_count = len(pending_filenames) - len(already_exist)
     cmd = [TDL_PATH, "dl", "-f", filtered_file, "-d", download_dir,
            "--proxy", PROXY, "--skip-same", "-t", "2"]
-    dl_ok = run_cmd(cmd, f"下载 {channel} 的 {len(filtered)} 张图片到 {download_dir}", target_dir=download_dir)
+    dl_ok = run_cmd(cmd, f"下载 {channel} 的 {len(filtered)} 张图片到 {download_dir}",
+                    target_dir=download_dir, expected_count=need_download_count)
 
     if not dl_ok:
         print(f"⚠ 下载命令执行失败，可能部分或全部图片未下载成功")
