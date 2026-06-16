@@ -100,6 +100,10 @@ def _read_process_output(process: subprocess.Popen, output_lines: list, state: d
                 continue
             if any(p in stripped for p in TDL_IGNORE_PATTERNS):
                 continue
+            # 过滤 tdl 进度条行（如 "频道名 ... [<#>.....] [0 in 201ms; 0/s]"）
+            # 保留 "done!" 行（如 "频道名 ... done! [8 in 609ms; 9/s]"）
+            if re.search(r'\[[<#>.]+\]', stripped) and 'done!' not in stripped:
+                continue
             output_lines.append(line)
             if '(' in line and ')' in line:
                 parts = line.split('(')
@@ -462,6 +466,8 @@ def filter_and_download(
 
 def check_tdl_login() -> bool:
     try:
+        print("  正在检查 tdl 登录状态（超时 60 秒）...")
+        start = time.time()
         result = subprocess.run(
             [TDL_PATH, "chat", "export", "-c", "woshadiao", "-T", "last", "-i", "1",
              "--proxy", PROXY, "--with-content"],
@@ -470,19 +476,32 @@ def check_tdl_login() -> bool:
             encoding="utf-8",
             timeout=60,
         )
+        elapsed = time.time() - start
         if result.returncode == 0:
-            print("✓ tdl 已登录")
+            print(f"✓ tdl 已登录（耗时 {elapsed:.1f}s）")
             return True
         else:
             combined = (result.stdout + result.stderr).strip()
-            if "login" in combined.lower() or "auth" in combined.lower():
-                print("✗ tdl 未登录，请先执行登录")
-                print("  命令: tdl login --proxy socks5://127.0.0.1:17891")
+            print(f"✗ tdl 连接失败（耗时 {elapsed:.1f}s，返回码 {result.returncode}）")
+            if combined:
+                # 显示关键输出（去掉 WARN 等噪音）
+                for line in combined.splitlines():
+                    line = line.strip()
+                    if not line or any(p in line for p in TDL_IGNORE_PATTERNS):
+                        continue
+                    print(f"  {line}")
             else:
-                print(f"✗ tdl 连接失败 (返回码 {result.returncode})")
-                print(f"  输出: {combined or '(无输出)'}")
-                print("  可能是代理不通或 Telegram 限速，请稍后重试")
+                print("  (无输出)")
+            if "login" in combined.lower() or "auth" in combined.lower():
+                print("  → 需要登录，命令: tdl login --proxy socks5://127.0.0.1:17891")
+            elif elapsed > 50:
+                print("  → 响应极慢，可能是代理不通或 Telegram 限速")
+            else:
+                print("  → 可能是代理不通或 Telegram 限速，请稍后重试")
             return False
+    except subprocess.TimeoutExpired:
+        print("✗ 检查登录超时（60 秒），代理可能不通")
+        return False
     except Exception as e:
         print(f"✗ 检查登录状态失败: {e}")
         return False
