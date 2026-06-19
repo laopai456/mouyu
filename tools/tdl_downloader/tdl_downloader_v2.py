@@ -92,9 +92,19 @@ def calculate_md5(file_path: str) -> str:
     return hash_md5.hexdigest()
 
 
+# 剥离 ANSI 转义序列（tdl 用 [A[K 实现进度条覆盖）
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|\[\d*[A-K]')
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub('', text)
+
+
 def _read_process_output(process: subprocess.Popen, output_lines: list, state: dict) -> None:
     try:
         for line in process.stdout:
+            # 先剥离 ANSI 转义序列
+            line = _strip_ansi(line)
             stripped = line.strip()
             if not stripped:
                 continue
