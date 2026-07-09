@@ -34,7 +34,6 @@ DISCOVER_CACHE_FILE = BASE_DIR / "cache" / "discover_cache.json"
 
 CMD_TIMEOUT = 600
 NO_OUTPUT_TIMEOUT = 60
-NO_OUTPUT_TIMEOUT_RETRY = 15
 MAX_STUCK_COUNT = 2
 # 文件数达到预期后，再等待多少秒让 tdl 自然退出，超时则强制终止
 FINISH_WAIT_TIMEOUT = 30
@@ -44,6 +43,7 @@ TDL_IGNORE_PATTERNS = [
     "CPU:",
     "Memory:",
     "Goroutines:",
+    "Type: id | Input:",
 ]
 MAX_RETRIES = 3
 MD5_CHUNK_SIZE = 8192
@@ -103,6 +103,9 @@ def _strip_ansi(text: str) -> str:
 def _read_process_output(process: subprocess.Popen, output_lines: list, state: dict) -> None:
     try:
         for line in process.stdout:
+            # 任何 stdout 输出都说明进程活着，记录时间戳
+            # （含被过滤的进度条行，避免跳过重复文件时误判卡死）
+            state["last_activity_time"] = time.time()
             # 先剥离 ANSI 转义序列
             line = _strip_ansi(line)
             stripped = line.strip()
@@ -110,9 +113,8 @@ def _read_process_output(process: subprocess.Popen, output_lines: list, state: d
                 continue
             if any(p in stripped for p in TDL_IGNORE_PATTERNS):
                 continue
-            # 过滤 tdl 进度条行（如 "频道名 ... [<#>.....] [0 in 201ms; 0/s]"）
-            # 保留 "done!" 行（如 "频道名 ... done! [8 in 609ms; 9/s]"）
-            if re.search(r'\[[<#>.]+\]', stripped) and 'done!' not in stripped:
+            # 过滤 tdl 进度条行及 done! 行（如 "频道名 ... done! [8 in 609ms; 9/s]"）
+            if 'done!' in stripped or re.search(r'\[[<#>.]+\]', stripped):
                 continue
             output_lines.append(line)
             if '(' in line and ')' in line:
@@ -160,6 +162,16 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None, ex
                     except OSError:
                         pass
 
+        # 首次下载前清理上次失败的 .tmp 残留文件
+        if attempt == 0 and target_dir and os.path.isdir(target_dir):
+            for f in os.listdir(target_dir):
+                if f.endswith(".tmp"):
+                    try:
+                        os.remove(os.path.join(target_dir, f))
+                        print(f"清理失败残留: {f}")
+                    except OSError:
+                        pass
+
         # tdl dl 不需要 stdin 交互，用 DEVNULL 避免意外写入导致崩溃
         process = subprocess.Popen(
             cmd,
@@ -172,8 +184,9 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None, ex
         )
 
         output_lines: list[str] = []
-        state: dict = {"channel_name": ""}
-        current_no_output_timeout = NO_OUTPUT_TIMEOUT_RETRY if attempt > 0 else NO_OUTPUT_TIMEOUT
+        state: dict = {"channel_name": "", "last_activity_time": time.time()}
+        # 重试时不缩短超时：重试常因暂时性问题，给更多时间才对
+        current_no_output_timeout = NO_OUTPUT_TIMEOUT
         start_time = time.time()
         initial_count = count_images_in_dir(target_dir) if target_dir else 0
         download_count = 0
@@ -218,9 +231,12 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None, ex
                 return True
 
             current_len = len(output_lines)
-            if current_len > last_output_len:
+            # 优先看进程活跃度（含被过滤的进度条行）：tdl 跳过重复文件时
+            # 既不写新文件也不输出非过滤行，但 stdout 仍有进度条输出
+            last_activity = state.get("last_activity_time", last_output_time)
+            if current_len > last_output_len or last_activity > last_output_time:
                 last_output_len = current_len
-                last_output_time = time.time()
+                last_output_time = max(last_output_time, last_activity)
                 stuck_count = 0
             elif time.time() - last_output_time > current_no_output_timeout:
                 # tdl 不接受 stdin 输入，不再发送 "y\n"
@@ -342,20 +358,45 @@ def _deduplicate_new_files(
     downloaded = 0
     skipped = 0
 
+    # 构建 size -> [md5] 索引，用于快速预筛
+    # 原理：文件相同 -> size 必相同；故 size 不同 -> 必不重复，可跳过 MD5 计算
+    # （老缓存记录可能缺 size 字段，此处跳过它们，按旧逻辑算 MD5 兜底）
+    size_index: dict[int, set[str]] = {}
+    for cached_md5, info in md5_cache.items():
+        sz = info.get("size")
+        if sz is not None:
+            size_index.setdefault(sz, set()).add(cached_md5)
+
     for filename in new_filenames:
         if not is_image(filename):
             continue
 
         file_path = os.path.join(target_dir, filename)
         try:
-            file_size_kb = os.path.getsize(file_path) / 1024
+            file_size = os.path.getsize(file_path)
+            file_size_kb = file_size / 1024
             if file_size_kb < MIN_FILE_SIZE_KB:
                 print(f"图片太小({file_size_kb:.0f}KB)，删除: {filename}")
                 os.remove(file_path)
                 continue
 
+            # size 预筛：该 size 在缓存中从未出现 -> 必为新图，免算 MD5
+            candidate_md5s = size_index.get(file_size)
+            if not candidate_md5s:
+                md5 = calculate_md5(file_path)
+                md5_cache[md5] = {
+                    "channel": channel,
+                    "filename": filename,
+                    "size": file_size,
+                    "time": datetime.now().isoformat(),
+                }
+                size_index.setdefault(file_size, set()).add(md5)
+                downloaded += 1
+                continue
+
+            # size 命中候选 -> 算 MD5 确认是否真重复
             md5 = calculate_md5(file_path)
-            if md5 in md5_cache:
+            if md5 in candidate_md5s:
                 print(f"重复图片，删除: {filename}")
                 os.remove(file_path)
                 skipped += 1
@@ -363,8 +404,10 @@ def _deduplicate_new_files(
                 md5_cache[md5] = {
                     "channel": channel,
                     "filename": filename,
+                    "size": file_size,
                     "time": datetime.now().isoformat(),
                 }
+                size_index.setdefault(file_size, set()).add(md5)
                 downloaded += 1
         except OSError as e:
             print(f"处理失败 {filename}: {e}")
@@ -475,46 +518,71 @@ def filter_and_download(
 
 
 def check_tdl_login() -> bool:
-    try:
-        print("  正在检查 tdl 登录状态（超时 60 秒）...")
-        start = time.time()
-        result = subprocess.run(
-            [TDL_PATH, "chat", "export", "-c", "woshadiao", "-T", "last", "-i", "1",
-             "--proxy", PROXY, "--with-content"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=60,
-        )
-        elapsed = time.time() - start
-        if result.returncode == 0:
-            print(f"✓ tdl 已登录（耗时 {elapsed:.1f}s）")
-            return True
-        else:
+    """检查 tdl 登录状态。
+
+    用 chat ls（只列对话列表，不拉内容）替代 chat export --with-content，
+    避免内容下载限速被误判为未登录。区分三类结果：
+    - 明确未登录（输出含 not authorized / please login）：直接返回 False
+    - 限速/网络抖动：重试，不轻易判未登录
+    - 成功：返回 True
+    """
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"  正在检查 tdl 登录状态（{attempt}/{max_retries}，超时 30 秒）...")
+            start = time.time()
+            result = subprocess.run(
+                [TDL_PATH, "chat", "ls", "--proxy", PROXY],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+            )
+            elapsed = time.time() - start
+            if result.returncode == 0:
+                print(f"✓ tdl 已登录（耗时 {elapsed:.1f}s）")
+                return True
+
+            # 返回非 0：区分"未登录"和"其它失败"
             combined = (result.stdout + result.stderr).strip()
-            print(f"✗ tdl 连接失败（耗时 {elapsed:.1f}s，返回码 {result.returncode}）")
+            combined_lower = combined.lower()
+            if "not authorized" in combined_lower or "please login" in combined_lower:
+                print(f"✗ tdl 未登录（耗时 {elapsed:.1f}s）")
+                if combined:
+                    for line in combined.splitlines():
+                        line = line.strip()
+                        if line and not any(p in line for p in TDL_IGNORE_PATTERNS):
+                            print(f"  {line}")
+                print("  -> 请登录: tdl login --proxy socks5://127.0.0.1:17891")
+                return False
+
+            # 其它失败（限速/网络抖动）：重试，不判未登录
+            print(f"⚠ 连接异常（耗时 {elapsed:.1f}s，返回码 {result.returncode}），可能是限速或网络抖动")
             if combined:
-                # 显示关键输出（去掉 WARN 等噪音）
-                for line in combined.splitlines():
+                for line in combined.splitlines()[:3]:
                     line = line.strip()
-                    if not line or any(p in line for p in TDL_IGNORE_PATTERNS):
-                        continue
-                    print(f"  {line}")
+                    if line and not any(p in line for p in TDL_IGNORE_PATTERNS):
+                        print(f"  {line}")
+            if attempt < max_retries:
+                print(f"  等待 5 秒后重试...")
+                time.sleep(5)
             else:
-                print("  (无输出)")
-            if "login" in combined.lower() or "auth" in combined.lower():
-                print("  → 需要登录，命令: tdl login --proxy socks5://127.0.0.1:17891")
-            elif elapsed > 50:
-                print("  → 响应极慢，可能是代理不通或 Telegram 限速")
+                print(f"  -> 重试 {max_retries} 次仍失败，代理可能不通或 Telegram 限速严重")
+                print(f"  -> 这不代表未登录，可稍后重试或直接运行下载观察")
+                return False
+        except subprocess.TimeoutExpired:
+            print(f"⚠ 检查登录超时（30 秒）")
+            if attempt < max_retries:
+                print(f"  等待 5 秒后重试...")
+                time.sleep(5)
             else:
-                print("  → 可能是代理不通或 Telegram 限速，请稍后重试")
+                print(f"  -> 重试 {max_retries} 次均超时，代理可能不通")
+                return False
+        except Exception as e:
+            print(f"✗ 检查登录状态失败: {e}")
             return False
-    except subprocess.TimeoutExpired:
-        print("✗ 检查登录超时（60 秒），代理可能不通")
-        return False
-    except Exception as e:
-        print(f"✗ 检查登录状态失败: {e}")
-        return False
+    return False
 
 
 def main() -> None:
