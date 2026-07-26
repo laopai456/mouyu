@@ -585,16 +585,147 @@ def check_tdl_login() -> bool:
     return False
 
 
+def tdl_login(login_type: str = "desktop") -> bool:
+    """调起 tdl 交互式登录。login_type: desktop / code / qr。
+
+    登录是交互式操作（选用户/输验证码/扫码），必须由用户在终端完成，
+    本函数只负责清理残留进程后拉起命令，完成后自动验证登录状态。
+    """
+    if login_type not in ("desktop", "code", "qr"):
+        print(f"✗ 不支持的登录方式: {login_type}（可选 desktop / code / qr）")
+        return False
+
+    print("登录前清理残留 tdl 进程（避免数据库锁冲突）...")
+    _kill_tdl_processes()
+
+    print(f"\n启动 tdl 登录（方式: {login_type}）...")
+    print("提示: 登录会覆盖 default namespace 的现有会话")
+    cmd = [TDL_PATH, "login", "-T", login_type, "--proxy", PROXY]
+    try:
+        # 交互式登录，继承当前终端的 stdin/stdout
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            print(f"✗ 登录命令返回码 {result.returncode}")
+            return False
+    except KeyboardInterrupt:
+        print("\n用户中断登录")
+        return False
+
+    # 登录后清理可能的残留进程，再验证
+    _kill_tdl_processes()
+    print("\n验证登录状态...")
+    return check_tdl_login()
+
+
+def check_channels() -> None:
+    """对比 CHANNELS 配置和 chat ls 结果，列出已加入/未加入的频道。
+
+    tdl 无 join 命令，未加入的频道只能输出 t.me 链接由用户手动添加。
+    """
+    print("获取当前账号已加入的对话列表...")
+    _kill_tdl_processes()
+    try:
+        result = subprocess.run(
+            [TDL_PATH, "chat", "ls", "-o", "json", "--proxy", PROXY],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        print("✗ 获取对话列表超时")
+        return
+
+    if result.returncode != 0:
+        combined = (result.stdout + result.stderr).strip()
+        print(f"✗ 获取失败（返回码 {result.returncode}）")
+        for line in combined.splitlines()[:5]:
+            line = line.strip()
+            if line:
+                print(f"  {line}")
+        if "not authorized" in combined.lower() or "please login" in combined.lower():
+            print("  -> 未登录，请先运行: python tdl_downloader_v2.py --login")
+        elif "another process" in combined.lower():
+            print("  -> 数据库被占用，请关闭其它 tdl 进程后重试")
+        return
+
+    # 解析 JSON 输出（比表格解析稳，避免 VisibleName 含空格导致列错位）
+    joined_usernames: set[str] = set()
+    try:
+        chats = json.loads(result.stdout) if result.stdout.strip() else []
+        for chat in chats:
+            username = chat.get("username") or ""
+            username = username.lstrip("@").strip()
+            if username:
+                joined_usernames.add(username)
+    except json.JSONDecodeError as e:
+        print(f"✗ 解析对话列表失败: {e}")
+        print(f"原始输出前200字符: {(result.stdout or '')[:200]}")
+        return
+
+    print(f"\n{'=' * 50}")
+    print(f"频道加群状态检查")
+    print(f"{'=' * 50}")
+    joined: list[str] = []
+    missing: list[str] = []
+    for channel in CHANNELS:
+        if channel in joined_usernames:
+            joined.append(channel)
+        else:
+            missing.append(channel)
+
+    print(f"\n✓ 已加入 ({len(joined)}/{len(CHANNELS)}):")
+    for c in joined:
+        print(f"  @{c}")
+
+    if missing:
+        print(f"\n✗ 未加入 ({len(missing)}):")
+        print("  tdl 无自动加群命令，请手动加入以下链接:")
+        for c in missing:
+            print(f"  - https://t.me/{c}  ( @{c} )")
+        print("\n  全部加入后重新运行: python tdl_downloader_v2.py --check-channels")
+    else:
+        print("\n✓ 全部频道已加入，可以开始下载")
+    print(f"{'=' * 50}")
+
+
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="tdl 下载器：下载/去重/上传 Telegram 频道图片",
+    )
+    parser.add_argument("-a", "--auto", action="store_true",
+                        help="自动模式：保留缓存继续下载，不询问")
+    parser.add_argument("--login", nargs="?", const="desktop", default=None,
+                        choices=["desktop", "code", "qr"],
+                        help="重新登录 tdl（默认 desktop，可选 code/qr）")
+    parser.add_argument("--check-channels", action="store_true",
+                        help="检查频道加群状态，列出未加入频道的 t.me 链接")
+    args = parser.parse_args()
+
     if not os.path.exists(TDL_PATH):
         print(f"错误: tdl 不存在于 {TDL_PATH}")
         return
 
+    # 子命令：登录
+    if args.login is not None:
+        ok = tdl_login(args.login)
+        sys.exit(0 if ok else 1)
+
+    # 子命令：检查加群状态
+    if args.check_channels:
+        check_channels()
+        return
+
+    # 默认：下载流程
     print("清理残留 tdl 进程...")
     _kill_tdl_processes()
 
     if not check_tdl_login():
         print("\n请先登录 tdl，然后重新运行脚本")
+        print("  登录命令: python tdl_downloader_v2.py --login")
         return
 
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -625,18 +756,35 @@ def main() -> None:
         print(f"  下载时间范围: {earliest[:10] if earliest else '未知'} ~ {latest[:10] if latest else '未知'}")
         print(f"{'=' * 50}")
 
-        auto_mode = "--auto" in sys.argv or "-a" in sys.argv
+        auto_mode = args.auto
         if auto_mode:
             print("自动模式: 保留现有缓存，继续下载。")
         else:
-            response = input("是否清理缓存重新下载? (y/N): ").strip().lower()
-            if response == "y":
-                print("正在清理缓存...")
+            print("\n缓存清理选项（去重记录和下载进度相互独立，可分别清理）:")
+            print("  1. 清理去重记录 (md5_cache)  - 清后已下过的图可能被重新下载")
+            print("  2. 清理下载进度 (progress)   - 清后各频道从头全量导出")
+            print("  3. 全部清理")
+            print("  其它/回车: 保留全部缓存，继续增量下载（推荐）")
+            choice = input("选择 [1/2/3/N]: ").strip()
+            if choice == "1":
+                print("正在清理去重记录 (md5_cache)...")
                 md5_cache = {}
                 save_json_cache(MD5_CACHE_FILE, md5_cache)
-                print("缓存已清理。")
+                print("去重记录已清理（下载进度保留）。")
+            elif choice == "2":
+                print("正在清理下载进度 (progress_cache)...")
+                progress_cache = {}
+                save_json_cache(PROGRESS_CACHE_FILE, progress_cache)
+                print("下载进度已清理（去重记录保留）。")
+            elif choice == "3":
+                print("正在清理全部缓存...")
+                md5_cache = {}
+                save_json_cache(MD5_CACHE_FILE, md5_cache)
+                progress_cache = {}
+                save_json_cache(PROGRESS_CACHE_FILE, progress_cache)
+                print("全部缓存已清理。")
             else:
-                print("保留现有缓存，继续下载。")
+                print("保留全部缓存，继续增量下载。")
     else:
         print("\n首次运行，无缓存，将开始全新下载。")
 
