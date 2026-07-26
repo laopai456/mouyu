@@ -221,11 +221,10 @@
     }
     .batch-review-item img {
       width: 100%;
-      aspect-ratio: 1;
-      object-fit: cover;
       display: block;
       cursor: pointer;
     }
+    /* 长图截断：由 JS 在 onload 时按 宽×1.8 判定后内联设置 max-height + object-fit */
     .batch-review-checkbox {
       position: absolute;
       top: 8px;
@@ -423,6 +422,7 @@
                 <div class="grid-dropdown-menu hidden" id="gridDropdownMenu">
                   <div onclick="switchReviewMode('grid', 4)">四宫格 (4张)</div>
                   <div onclick="switchReviewMode('grid', 8)">八宫格 (8张)</div>
+                  <div onclick="switchReviewMode('grid', 12)">十二宫格 (12张)</div>
                 </div>
               </div>
             </div>
@@ -690,7 +690,7 @@
       } else {
         listBtn.classList.remove('btn-primary');
         gridBtn.classList.add('btn-primary');
-        gridBtn.textContent = (gridSize === 4 ? '四' : '八') + '宫格 ▾';
+        gridBtn.textContent = ({4:'四', 8:'八', 12:'十二'}[gridSize] || gridSize) + '宫格 ▾';
         listContainer.classList.add('hidden');
         gridContainer.classList.remove('hidden');
         if (batchActions) batchActions.style.display = 'flex';
@@ -764,7 +764,7 @@
         return `
           <div class="batch-review-item">
             <div class="batch-review-checkbox ${isChecked ? 'checked' : ''}" onclick="toggleCheckbox('${img._id}')"></div>
-            <img src="${url}" onclick="openPreview('${img._id}')" onerror="console.error('网格图片加载失败:', this.src)" style="background:#eee;">
+            <img src="${url}" onclick="openPreview('${img._id}')" onload="clampLongImage(this)" onerror="console.error('网格图片加载失败:', this.src)" style="background:#eee;">
           </div>
         `;
       }).join('');
@@ -776,7 +776,22 @@
       selectedMap.set(imageId, !current);
       renderBatchGrid();
     }
-    
+
+    // 长图截断：高 > 宽×1.8 时，在 宽×1.8 处截断（cover 居中裁切上下），点击放大看全
+    // 短图按原比例显示，不拉伸不裁切
+    function clampLongImage(img) {
+      const nw = img.naturalWidth;
+      const nh = img.naturalHeight;
+      if (!nw || !nh) return;
+      // 渲染宽度 = 容器宽度（width:100%）。取 offsetWidth 作为实际像素宽
+      const renderW = img.offsetWidth || nw;
+      const maxHeight = Math.round(renderW * 1.8);
+      if (nh > renderW * 1.8) {
+        img.style.maxHeight = maxHeight + 'px';
+        img.style.objectFit = 'cover';
+      }
+    }
+
     function toggleSelectAllGrid() {
       const allSelected = batchImages.every(img => selectedMap.get(img._id));
       const newValue = !allSelected;
