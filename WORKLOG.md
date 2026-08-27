@@ -12,6 +12,7 @@
   - 顺手修复：已拒绝 tab 的「通过」按钮此前误刷待审核列表（`reviewImage` 增加 `fromStatus` 参数；批量操作改用 `reviewImageRequest` 统一刷新）
 - **改动**（`tools/gui.py` + 重建 `木偶鱼工具.exe`）：
   - 「打开审核」改为内置 ThreadingHTTPServer（localhost:9000 serve `admin/` 目录）后打开 `http://localhost:9000/admin.html`；admin.html 缺失回退托管版；端口被占则复用现有服务
+  - **修复 windowed exe 下 ERR_EMPTY_RESPONSE**：console=False 的 exe 里 sys.stderr 为 None，SimpleHTTPRequestHandler 每请求写访问日志抛异常掐断连接（用户实测浏览器 ERR_EMPTY_RESPONSE，curl/python 控制台正常所以先前未暴露）。覆写 `_QuietAdminHandler.log_message` + `_QuietAdminServer.handle_error` 静默，serve 线程加异常兜底日志；stderr=None 模拟复现并验证修复（200 OK），exe 已重建
 - **验证**：inline script node 语法检查通过；mock 测试壳浏览器实测三态/统计/tab，用户人工确认点击正常；本地真实后台 openid 登录读数 待审核194/已通过587/转发0/已拒绝0；gui 本地服务单测（起服务/页面200含转发群组/复用）通过；exe 重建冒烟（进程存活）通过
 - **注意**：线上托管版 admin.html 仍是 7-26（a39af08）旧代码，无本次新功能，用户决定暂不管；`tdl_downloader_v2.py` 内 ADMIN_URL 仍指托管版（仅日志提示用），未改
 - **提交**：`feat(admin)` 三态+转发群组、`feat(tools)` 本地审核链接+exe

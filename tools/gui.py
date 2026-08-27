@@ -10,6 +10,8 @@ import sys
 import platform
 import signal
 import webbrowser
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 # ── 路径配置（兼容 .py 和 .exe 运行）──
@@ -35,6 +37,25 @@ ADMIN_URL = "https://MOYU_ENV_ID_PLACEHOLDER-1414730090.tcloudbaseapp.com/admin.
 ADMIN_DIR = EXE_DIR / "admin"
 LOCAL_ADMIN_PORT = 9000
 admin_server = None
+
+
+class _QuietAdminHandler(SimpleHTTPRequestHandler):
+    """静默版静态服务 handler。
+
+    windowed exe（console=False）下 sys.stderr 为 None，父类 log_message
+    每请求写 stderr 会抛异常掐断连接（浏览器表现为 ERR_EMPTY_RESPONSE），
+    故覆写为静默。directory 由构造参数传入。
+    """
+    def log_message(self, format, *args):
+        pass
+
+
+class _QuietAdminServer(ThreadingHTTPServer):
+    """同上：默认 handle_error 会 print 到 stderr，一并静默。"""
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        pass
 
 running_process: subprocess.Popen | None = None
 process_lock = threading.Lock()
@@ -161,12 +182,16 @@ class App:
             return ADMIN_URL
         if admin_server is None:
             try:
-                from functools import partial
-                from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-                handler = partial(SimpleHTTPRequestHandler, directory=str(ADMIN_DIR))
-                admin_server = ThreadingHTTPServer(("localhost", LOCAL_ADMIN_PORT), handler)
-                admin_server.daemon_threads = True
-                threading.Thread(target=admin_server.serve_forever, daemon=True).start()
+                handler = partial(_QuietAdminHandler, directory=str(ADMIN_DIR))
+                admin_server = _QuietAdminServer(("localhost", LOCAL_ADMIN_PORT), handler)
+
+                def _serve():
+                    try:
+                        admin_server.serve_forever()
+                    except Exception as e:
+                        self.log_write(f"ERROR 本地审核服务异常退出: {e}\n")
+
+                threading.Thread(target=_serve, daemon=True).start()
                 self.log_write(f"INFO 本地审核服务已启动 http://localhost:{LOCAL_ADMIN_PORT}/admin.html\n")
             except OSError:
                 # 端口已被占用：大概率已有本地服务在跑，直接复用
