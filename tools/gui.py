@@ -30,7 +30,11 @@ DOWNLOADER_CACHE = EXE_DIR / "tools" / "tdl_downloader" / "cache" / "md5_cache.j
 DOWNLOADER_PROGRESS = EXE_DIR / "tools" / "tdl_downloader" / "cache" / "progress_cache.json"
 
 INCLUDE_TYPES = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
+# 托管版后台（本地 admin.html 缺失时的回退）
 ADMIN_URL = "https://MOYU_ENV_ID_PLACEHOLDER-1414730090.tcloudbaseapp.com/admin.html"
+ADMIN_DIR = EXE_DIR / "admin"
+LOCAL_ADMIN_PORT = 9000
+admin_server = None
 
 running_process: subprocess.Popen | None = None
 process_lock = threading.Lock()
@@ -149,8 +153,29 @@ class App:
 
     # ── 打开审核页面 ──
 
+    def _ensure_local_admin(self) -> str:
+        """本地起静态服务托管 admin/ 目录；admin.html 缺失时回退托管版 URL"""
+        global admin_server
+        if not (ADMIN_DIR / "admin.html").exists():
+            self.log_write("WARN 本地admin.html不存在，回退打开托管版\n")
+            return ADMIN_URL
+        if admin_server is None:
+            try:
+                from functools import partial
+                from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+                handler = partial(SimpleHTTPRequestHandler, directory=str(ADMIN_DIR))
+                admin_server = ThreadingHTTPServer(("localhost", LOCAL_ADMIN_PORT), handler)
+                admin_server.daemon_threads = True
+                threading.Thread(target=admin_server.serve_forever, daemon=True).start()
+                self.log_write(f"INFO 本地审核服务已启动 http://localhost:{LOCAL_ADMIN_PORT}/admin.html\n")
+            except OSError:
+                # 端口已被占用：大概率已有本地服务在跑，直接复用
+                self.log_write(f"INFO 端口{LOCAL_ADMIN_PORT}已被占用，复用现有服务\n")
+        return f"http://localhost:{LOCAL_ADMIN_PORT}/admin.html"
+
     def open_admin(self):
-        webbrowser.open(ADMIN_URL)
+        url = self._ensure_local_admin()
+        webbrowser.open(url)
         self.admin_btn.config(text="✅ 已打开")
         self.root.after(2000, lambda: self.admin_btn.config(text="🔍 打开审核"))
 
