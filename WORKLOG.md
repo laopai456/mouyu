@@ -6,6 +6,7 @@
 
 - **改动**（`admin/admin.html`）：宫格下拉新增「十六宫格 (16张)」，按钮文案映射表加 `16:'十六'`。列数固定 4 列不动，16 张即 4 行，`.limit(gridSize)` 原本就参数化，无其它改动。
 - **验证**：内联 script 语法检查通过；两处标记 grep 确认。
+- **修复**（`tools/gui.py` + 重建 exe）：用户反馈「新打开的页面没有十六宫格」——排查为**浏览器 heuristic 缓存旧 admin.html**（服务端文件与 curl 实测均已是新版）。`_QuietAdminHandler` 加 `Cache-Control: no-store` 响应头，本地服务不再被缓存，以后改 admin.html 即点即新。模拟验证 no-store 生效 + 内容含十六宫格，exe 重建。用户侧需：关旧工具开新 exe + 浏览器 Ctrl+F5 强刷一次。
 
 ## 2026-08-28 工具加机器人控制三按钮 + 日志左右分屏
 

@@ -6,9 +6,11 @@ import subprocess
 import threading
 import json
 import os
+import re
 import sys
 import platform
 import signal
+import time
 import webbrowser
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -31,6 +33,19 @@ UPLOADER_CACHE = EXE_DIR / "tools" / "uploader" / "cache" / "md5_cache.json"
 DOWNLOADER_CACHE = EXE_DIR / "tools" / "tdl_downloader" / "cache" / "md5_cache.json"
 DOWNLOADER_PROGRESS = EXE_DIR / "tools" / "tdl_downloader" / "cache" / "progress_cache.json"
 
+# ── QQ 机器人（qqbot 仓库）控制 ──
+QQBOT_DIR = Path(r"C:\Users\w\Documents\GitHub\qqbot")
+QQBOT_LOG_DIR = QQBOT_DIR / "logs"
+QQBOT_BOT_LOG = QQBOT_LOG_DIR / "bot.log"
+QQBOT_STOP_FLAG = QQBOT_LOG_DIR / "STOPPED"
+QQBOT_STOPALL_BAT = QQBOT_DIR / "一键停止.bat"
+QQBOT_SILENT_VBS = QQBOT_DIR / "silent_start_bot.vbs"
+BOT_LOG_INIT_BYTES = 8000   # 打开窗口时回看 bot.log 的字节数
+BOT_LOG_MAX_LINES = 3000    # 机器人日志面板保留的行数上限
+BOT_PORT = 8080             # NoneBot 监听端口（bot 存活判定，与看门狗一致）
+# loguru 写进 bot.log 的 ANSI 颜色码，tk 文本框不解释，显示前剥掉
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
 INCLUDE_TYPES = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
 # 托管版后台（本地 admin.html 缺失时的回退）
 ADMIN_URL = "https://MOYU_ENV_ID_PLACEHOLDER-1414730090.tcloudbaseapp.com/admin.html"
@@ -48,6 +63,12 @@ class _QuietAdminHandler(SimpleHTTPRequestHandler):
     """
     def log_message(self, format, *args):
         pass
+
+    def end_headers(self):
+        # 本地开发服务，禁缓存：否则浏览器 heuristic 缓存旧 admin.html，
+        # 改完页面再点「打开审核」看到的还是旧版
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
 
 
 class _QuietAdminServer(ThreadingHTTPServer):
@@ -88,11 +109,13 @@ class App:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("木偶鱼 - 下载/上传工具")
-        self.root.geometry("800x600")
-        self.root.minsize(600, 400)
+        self.root.geometry("1000x620")
+        self.root.minsize(800, 480)
 
         # 当前运行状态: None | "download" | "upload"
         self.current_action: str | None = None
+        # 机器人按钮互斥（启/停/清理 同时只允许一个在跑）
+        self._bot_busy = False
 
         # 样式
         style = ttk.Style()
@@ -128,7 +151,7 @@ class App:
         self.clean_cache_cb.pack(side=tk.LEFT)
 
         # 第二行按钮区
-        btn_row2 = ttk.Frame(self.root, padding=(12, 0, 12, 12))
+        btn_row2 = ttk.Frame(self.root, padding=(12, 0, 12, 6))
         btn_row2.pack(fill=tk.X)
 
         self.copy_log_btn = ttk.Button(btn_row2, text="📋 复制日志", command=self.copy_log, width=16)
@@ -137,19 +160,50 @@ class App:
         self.admin_btn = ttk.Button(btn_row2, text="🔍 打开审核", command=self.open_admin, width=16)
         self.admin_btn.pack(side=tk.LEFT)
 
-        # ─ 日志区 ─
+        # 第三行按钮区：QQ 机器人控制（判定/清退逻辑与 qqbot 看门狗同一套）
+        btn_row3 = ttk.Frame(self.root, padding=(12, 0, 12, 12))
+        btn_row3.pack(fill=tk.X)
+
+        self.bot_start_btn = ttk.Button(btn_row3, text="🤖 启动机器人", command=self.bot_start, width=14)
+        self.bot_start_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.bot_stop_btn = ttk.Button(btn_row3, text="⏹ 停止机器人", command=self.bot_stop, width=14)
+        self.bot_stop_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.bot_clean_btn = ttk.Button(btn_row3, text="🧹 清理所有进程", command=self.bot_clean, width=14)
+        self.bot_clean_btn.pack(side=tk.LEFT)
+
+        # ─ 日志区（左右分屏：工具日志 | 机器人日志） ─
         log_frame = ttk.Frame(self.root, padding=(12, 0, 12, 12))
         log_frame.pack(fill=tk.BOTH, expand=True)
 
+        log_paned = ttk.PanedWindow(log_frame, orient=tk.HORIZONTAL)
+        log_paned.pack(fill=tk.BOTH, expand=True)
+
+        tool_pane = ttk.LabelFrame(log_paned, text="工具日志", padding=2)
+        bot_pane = ttk.LabelFrame(log_paned, text="机器人日志（qqbot/logs/bot.log）", padding=2)
+        log_paned.add(tool_pane, weight=1)
+        log_paned.add(bot_pane, weight=1)
+
         self.log = scrolledtext.ScrolledText(
-            log_frame, font=("Consolas", 10), wrap=tk.WORD,
+            tool_pane, font=("Consolas", 10), wrap=tk.WORD,
             bg="#1e1e1e", fg="#d4d4d4", insertbackground="white",
             state=tk.DISABLED,
         )
         self.log.pack(fill=tk.BOTH, expand=True)
 
+        self.botlog = scrolledtext.ScrolledText(
+            bot_pane, font=("Consolas", 10), wrap=tk.WORD,
+            bg="#1e1e1e", fg="#9cdcfe", insertbackground="white",
+            state=tk.DISABLED,
+        )
+        self.botlog.pack(fill=tk.BOTH, expand=True)
+
         # 刷新计数
         self.refresh_counts()
+
+        # 机器人日志尾随线程（不管 bot 由谁启动，tail bot.log 都能看到）
+        threading.Thread(target=self._tail_bot_log, daemon=True).start()
 
         # 窗口关闭时清理子进程
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -210,6 +264,225 @@ class App:
         self.dl_count_label.config(text=str(get_download_count()))
         self.ul_count_label.config(text=str(get_upload_count()))
         self.root.after(5000, self.refresh_counts)
+
+    # ── 机器人日志面板 ──
+
+    def bot_log_write(self, text: str):
+        self.botlog.config(state=tk.NORMAL)
+        self.botlog.insert(tk.END, text)
+        # 行数封顶，超出删最旧的，避免长跑撑爆内存
+        lines = int(self.botlog.index("end-1c").split(".")[0])
+        if lines > BOT_LOG_MAX_LINES:
+            self.botlog.delete("1.0", f"{lines - BOT_LOG_MAX_LINES}.0")
+        self.botlog.see(tk.END)
+        self.botlog.config(state=tk.DISABLED)
+
+    def _tail_bot_log(self):
+        """每秒尾随 qqbot/logs/bot.log（bot.py 写入为 UTF-8，与状态面板同源）。"""
+        pos = 0
+        inited = False
+        skip_partial = False
+        while True:
+            try:
+                if QQBOT_BOT_LOG.exists():
+                    size = QQBOT_BOT_LOG.stat().st_size
+                    if not inited:
+                        inited = True
+                        if size > BOT_LOG_INIT_BYTES:
+                            pos = size - BOT_LOG_INIT_BYTES
+                            skip_partial = True  # 从中间起读，首行多半是半截
+                            self.bot_log_write("……（仅回看最近部分日志）\n")
+                    if size < pos:  # 日志轮转（start_silent.bat 超 10MB 会删了重建）
+                        pos = 0
+                        self.bot_log_write("[bot.log 已重建，重新从头跟踪]\n")
+                    if size > pos:
+                        with open(QQBOT_BOT_LOG, "rb") as f:
+                            f.seek(pos)
+                            chunk = f.read()
+                        pos += len(chunk)
+                        if skip_partial:
+                            nl = chunk.find(b"\n")
+                            if nl != -1:
+                                chunk = chunk[nl + 1:]
+                                skip_partial = False
+                            else:
+                                chunk = b""
+                        text = _ANSI_RE.sub("", chunk.decode("utf-8", errors="replace"))
+                        if text:
+                            self.bot_log_write(text)
+            except Exception:
+                pass  # 读日志失败下一秒重试
+            time.sleep(1)
+
+    # ── 机器人启停 ──
+
+    def bot_start(self):
+        self._bot_action(self._do_bot_start)
+
+    def bot_stop(self):
+        self._bot_action(self._do_bot_stop)
+
+    def bot_clean(self):
+        self._bot_action(self._do_bot_clean)
+
+    def _bot_action(self, fn):
+        """机器人按钮公共壳：后台线程执行，期间三个按钮禁用。"""
+        if self._bot_busy:
+            return
+        self._bot_busy = True
+        for btn in (self.bot_start_btn, self.bot_stop_btn, self.bot_clean_btn):
+            btn.config(state=tk.DISABLED)
+
+        def worker():
+            try:
+                fn()
+            except Exception as e:
+                self.bot_log_write(f"\n✗ 错误: {e}\n")
+            finally:
+                self.root.after(0, self._bot_buttons_idle)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _bot_buttons_idle(self):
+        self._bot_busy = False
+        for btn in (self.bot_start_btn, self.bot_stop_btn, self.bot_clean_btn):
+            btn.config(state=tk.NORMAL)
+
+    def _do_bot_start(self):
+        self.bot_log_write("\n" + "─" * 46 + "\n🤖 启动机器人……\n")
+        if QQBOT_STOP_FLAG.exists():
+            QQBOT_STOP_FLAG.unlink()
+            self.bot_log_write("已清除手动停止标志（logs\\STOPPED）\n")
+        if self._napcat_running():
+            self.bot_log_write("NapCat/QQ 已在运行，跳过（避免重启 QQ 触发风控）\n")
+        else:
+            self.bot_log_write("NapCat/QQ 未运行，经计划任务拉起（上线约需 30-60 秒）……\n")
+            self._run_logged(["schtasks", "/Run", "/TN", "QQBotAutoStart"])
+        if self._port_listening():
+            self.bot_log_write("机器人进程已在运行（8080 监听中），跳过\n")
+        else:
+            self.bot_log_write("启动机器人进程（静默，输出进本面板）……\n")
+            self._run_logged(["wscript.exe", str(QQBOT_SILENT_VBS)])
+        self.bot_log_write("启动指令执行完毕，连接是否恢复看上方日志滚动。\n")
+
+    def _do_bot_stop(self):
+        """轻停：只停机器人 python，不动 NapCat/QQ（避免触发风控），看门狗写标志暂停。"""
+        self.bot_log_write("\n" + "─" * 46 + "\n⏹ 停止机器人……\n")
+        QQBOT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        QQBOT_STOP_FLAG.touch()
+        self.bot_log_write("已写停止标志，看门狗不会再自动拉起\n")
+        killed = self._kill_bot_pythons()
+        self.bot_log_write(f"已结束 {killed} 个机器人进程；NapCat/QQ 未动。\n")
+
+    def _do_bot_clean(self):
+        """全清：跑 qqbot 的一键停止.bat（bot + NapCat/QQ + 看门狗暂停），再兜底清残留 bot.py。"""
+        self.bot_log_write("\n" + "─" * 46 + "\n🧹 清理机器人所有相关进程……\n")
+        if QQBOT_STOPALL_BAT.exists():
+            self._run_bat_streamed(QQBOT_STOPALL_BAT, ["/auto"])
+        else:
+            self.bot_log_write(f"WARN 未找到 {QQBOT_STOPALL_BAT}，仅做进程兜底清理\n")
+        killed = self._kill_bot_pythons()
+        self.bot_log_write(f"兜底清理：结束 {killed} 个 bot.py 进程。恢复点「启动机器人」。\n")
+
+    # ── 进程探测/清理工具 ──
+
+    def _run_logged(self, cmd: list[str]):
+        _NO_WIN = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+        try:
+            r = subprocess.run(cmd, capture_output=True, creationflags=_NO_WIN)
+            if r.returncode != 0:
+                err = (r.stderr or b"").decode("gbk", "replace").strip()
+                self.bot_log_write(f"WARN 命令返回码 {r.returncode}: {' '.join(cmd)}\n{err}\n")
+        except Exception as e:
+            self.bot_log_write(f"WARN 命令执行失败 {' '.join(cmd)}: {e}\n")
+
+    def _run_bat_streamed(self, bat: Path, args: list[str] | None = None):
+        """跑 qqbot 的 bat 并把输出（bat 输出为 GBK）流式写进机器人日志面板。"""
+        _NO_WIN = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+        try:
+            p = subprocess.Popen(
+                ["cmd", "/c", str(bat), *(args or [])],
+                cwd=str(QQBOT_DIR), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                creationflags=_NO_WIN,
+            )
+            if p.stdout:
+                for raw in p.stdout:
+                    self.bot_log_write(raw.decode("gbk", "replace"))
+            p.wait()
+        except Exception as e:
+            self.bot_log_write(f"WARN 脚本执行失败 {bat.name}: {e}\n")
+
+    def _port_listening(self, port: int = BOT_PORT) -> bool:
+        """端口是否有人监听（与看门狗的 bot 存活判定一致）。"""
+        _NO_WIN = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+        try:
+            out = subprocess.run(
+                ["netstat", "-ano"], capture_output=True, timeout=10,
+                encoding="gbk", errors="replace", creationflags=_NO_WIN,
+            ).stdout
+        except Exception:
+            return False
+        return any(f":{port}" in line and "LISTENING" in line for line in out.splitlines())
+
+    def _napcat_running(self) -> bool:
+        _NO_WIN = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+        try:
+            out = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq NapCatWinBootMain.exe"],
+                capture_output=True, timeout=10,
+                encoding="gbk", errors="replace", creationflags=_NO_WIN,
+            ).stdout
+        except Exception:
+            return False
+        return "NapCatWinBootMain" in out
+
+    def _list_python_procs(self) -> list[tuple[str, str]]:
+        """命令行含 bot.py 的 python.exe 进程：[(pid, cmdline)]，含历史残留实例。"""
+        _NO_WIN = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+        try:
+            raw = subprocess.run(
+                ["wmic", "process", "where", "name='python.exe'",
+                 "get", "CommandLine,ProcessId", "/format:csv"],
+                capture_output=True, timeout=15, creationflags=_NO_WIN,
+            ).stdout.decode("gbk", "replace")
+        except Exception:
+            return []
+        pairs = []
+        for line in raw.splitlines():
+            line = line.strip()
+            cmd_part, _, pid_part = line.rpartition(",")  # csv 行尾是 PID
+            if pid_part.isdigit() and "bot.py" in cmd_part:
+                pairs.append((pid_part, cmd_part))
+        return pairs
+
+    def _kill_bot_pythons(self) -> int:
+        """结束机器人 python：8080 监听者 + 命令行含 bot.py 的所有实例（含残留旧进程）。"""
+        _NO_WIN = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+        pids: set[str] = set()
+        try:
+            out = subprocess.run(
+                ["netstat", "-ano"], capture_output=True, timeout=10,
+                encoding="gbk", errors="replace", creationflags=_NO_WIN,
+            ).stdout
+            for line in out.splitlines():
+                if f":{BOT_PORT}" in line and "LISTENING" in line:
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        pids.add(parts[4])
+        except Exception:
+            pass
+        for pid, cmdline in self._list_python_procs():
+            self.bot_log_write(f"命中 bot 进程 PID={pid}: {cmdline[:100]}\n")
+            pids.add(pid)
+        killed = 0
+        for pid in pids:
+            r = subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", pid],
+                capture_output=True, encoding="gbk", errors="replace", creationflags=_NO_WIN,
+            )
+            if r.returncode == 0:
+                killed += 1
+        return killed
 
     # ── 按钮切换 ──
 
