@@ -19,3 +19,6 @@ TelegramStorageParser/
 # PyInstaller build artifacts
 build/
 *.spec
+
+# Python bytecode
+tools/**/__pycache__/

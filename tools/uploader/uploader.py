@@ -35,6 +35,9 @@ class ImageUploader:
                 logging.StreamHandler(sys.stdout)
             ]
         )
+        # 屏蔽 qcloud_cos / tencentcloud SDK 的 INFO 噪音（如 "put object, url=..."）
+        for noisy in ('qcloud_cos', 'tencentcloud'):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
         self.logger = logging.getLogger(__name__)
     
     def setup_cos_client(self):
@@ -53,10 +56,9 @@ class ImageUploader:
             )
             self.cos_client = CosS3Client(cos_conf)
             self.logger.info("COS 客户端初始化成功")
-            
+
             scf_cred = credential.Credential(self.secret_id, self.secret_key)
             self.scf_client = scf_client.ScfClient(scf_cred, self.region)
-            self.logger.info("SCF 客户端初始化成功")
         else:
             self.cos_client = None
             self.scf_client = None
@@ -162,8 +164,6 @@ class ImageUploader:
                 except Exception as e:
                     self.logger.error(f"删除重复图片失败: {e}")
                 return
-            
-            self.logger.info(f"开始上传: {file_path}")
 
             file_ext = Path(file_path).suffix.lower()
             needs_compress = file_ext in ['.png', '.bmp', '.webp', '.tiff']
@@ -172,31 +172,28 @@ class ImageUploader:
             timestamp = int(now.timestamp() * 1000)
 
             if needs_compress:
-                self.logger.info(f"压缩图片: {file_path}")
                 file_content = self.compress_to_jpeg(file_path)
                 if not file_content:
                     self.logger.error(f"图片压缩失败，跳过: {file_path}")
                     return
                 cloud_filename = f"{timestamp}_{Path(file_path).stem}.jpg"
-                self.logger.info(f"压缩完成，体积: {len(file_content) / 1024:.1f}KB")
             else:
                 with open(file_path, 'rb') as f:
                     file_content = f.read()
                 cloud_filename = f"{timestamp}_{Path(file_path).name}"
 
             cloud_path = f"memes/{year_month}/{cloud_filename}"
-            
+
             upload_result = self.upload_to_cos(cloud_path, file_content)
-            
+
             if not upload_result['success']:
-                self.logger.error(f"上传失败: {upload_result.get('message', '未知错误')}")
+                self.logger.error(f"上传失败: {upload_result.get('message', '未知错误')} - {file_path}")
                 return
-            
+
             file_id = upload_result['file_id']
-            self.logger.info(f"上传成功: {file_id}")
-            
+
             db_result = self.write_to_database(file_id, md5)
-            
+
             if db_result['success']:
                 self.md5_cache[md5] = {
                     'file_id': file_id,
@@ -204,17 +201,16 @@ class ImageUploader:
                     'file_path': file_path
                 }
                 self.save_md5_cache()
-                self.logger.info(f"数据库写入成功，图片已添加到待审核列表")
-                
+                self.logger.info(f"✓ {Path(file_path).name}")
+
                 delete_after_upload = self.config.get('delete_after_upload', False)
                 if delete_after_upload:
                     try:
                         os.remove(file_path)
-                        self.logger.info(f"已清理本地文件: {file_path}")
                     except Exception as e:
                         self.logger.error(f"清理本地文件失败: {e}")
             else:
-                self.logger.error(f"数据库写入失败: {db_result.get('message', '未知错误')}")
+                self.logger.error(f"数据库写入失败: {db_result.get('message', '未知错误')} - {file_path}")
             
             return
         
@@ -272,7 +268,6 @@ class ImageUploader:
             ret_msg = json.loads(resp.Result.RetMsg)
             
             if ret_msg.get('success'):
-                self.logger.info(f"云函数调用成功: {ret_msg.get('msg', '')}")
                 return {'success': True}
             else:
                 self.logger.error(f"云函数调用失败: {ret_msg.get('msg', '未知错误')}")

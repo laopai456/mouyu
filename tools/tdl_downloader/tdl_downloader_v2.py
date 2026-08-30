@@ -34,7 +34,13 @@ DISCOVER_CACHE_FILE = BASE_DIR / "cache" / "discover_cache.json"
 
 CMD_TIMEOUT = 600
 NO_OUTPUT_TIMEOUT = 60
+# 下载场景卡死超时：tdl 卡在某张图重试时既无输出也不写文件，缩短到 30s 快速重启
+DOWNLOAD_NO_OUTPUT_TIMEOUT = 30
+# 连接/初始化阶段（0 文件下载）容忍更久：tdl 连 Telegram/代理慢，避免误杀
+DOWNLOAD_CONNECT_TIMEOUT = 90
 MAX_STUCK_COUNT = 2
+# 下载坏文件剔除最大轮数：每轮移除 tdl 卡死遗留的 .tmp 对应文件，重试剩余
+MAX_BAD_FILE_ROUNDS = 3
 # 文件数达到预期后，再等待多少秒让 tdl 自然退出，超时则强制终止
 FINISH_WAIT_TIMEOUT = 30
 TDL_IGNORE_PATTERNS = [
@@ -111,6 +117,9 @@ def _read_process_output(process: subprocess.Popen, output_lines: list, state: d
             stripped = line.strip()
             if not stripped:
                 continue
+            # 任何非空输出都算进程活跃（含被过滤的进度条行）：
+            # tdl 跳过重复文件时不写新文件、也不输出非过滤行，但 stdout 仍有进度条
+            state["last_activity_time"] = time.time()
             if any(p in stripped for p in TDL_IGNORE_PATTERNS):
                 continue
             # 过滤 tdl 进度条行及 done! 行（如 "频道名 ... done! [8 in 609ms; 9/s]"）
@@ -144,12 +153,24 @@ def _kill_tdl_processes() -> None:
         pass
 
 
-def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None, expected_count: int = 0) -> bool:
+def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None,
+            expected_count: int = 0, enable_stuck_check: bool = True,
+            no_output_timeout: Optional[int] = None,
+            max_retries: Optional[int] = None) -> tuple[bool, bool]:
+    """执行命令。
+
+    返回 (success, stuck_terminated)：
+    - success: 命令是否成功
+    - stuck_terminated: 是否因「无输出卡死」被强制终止（用于上层判断要不要剔除坏文件）
+    """
     print(f"\n{'=' * 50}")
     print(f"{desc}")
     print(f"{'=' * 50}")
 
-    for attempt in range(MAX_RETRIES):
+    retries = max_retries if max_retries is not None else MAX_RETRIES
+    stuck_terminated = False  # 是否因「无输出卡死」被终止
+
+    for attempt in range(retries):
         _kill_tdl_processes()
 
         # 重试时清理 tdl 断点续传缓存，避免残留状态导致卡住
@@ -186,7 +207,7 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None, ex
         output_lines: list[str] = []
         state: dict = {"channel_name": "", "last_activity_time": time.time()}
         # 重试时不缩短超时：重试常因暂时性问题，给更多时间才对
-        current_no_output_timeout = NO_OUTPUT_TIMEOUT
+        current_no_output_timeout = no_output_timeout or NO_OUTPUT_TIMEOUT
         start_time = time.time()
         initial_count = count_images_in_dir(target_dir) if target_dir else 0
         download_count = 0
@@ -228,7 +249,7 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None, ex
                 process.terminate()
                 process.wait(5)
                 # 下载已完成，视为成功
-                return True
+                return True, False
 
             current_len = len(output_lines)
             # 优先看进程活跃度（含被过滤的进度条行）：tdl 跳过重复文件时
@@ -238,28 +259,40 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None, ex
                 last_output_len = current_len
                 last_output_time = max(last_output_time, last_activity)
                 stuck_count = 0
-            elif time.time() - last_output_time > current_no_output_timeout:
-                # tdl 不接受 stdin 输入，不再发送 "y\n"
-                # 仅基于文件数增长和 stdout 输出判断是否卡住
-                stuck_count += 1
-                print(f"\n{current_no_output_timeout}秒无输出，可能卡住 ({stuck_count}/{MAX_STUCK_COUNT})...")
-                last_output_time = time.time()
-                if stuck_count >= MAX_STUCK_COUNT:
-                    print(f"连续{stuck_count}次卡住，终止并重启...")
+            else:
+                # 自适应超时：连接/初始化阶段（0 文件）给更长时间；下载中卡住则快速终止
+                is_connecting = bool(target_dir and download_count == 0)
+                effective_timeout = DOWNLOAD_CONNECT_TIMEOUT if is_connecting else current_no_output_timeout
+                idle = time.time() - last_output_time
+                if enable_stuck_check and idle > effective_timeout:
+                    # 仅基于文件数增长和 stdout 输出判断是否卡住
+                    phase = "连接" if is_connecting else "下载"
+                    stuck_count += 1
+                    print(f"\n[{phase}阶段] {effective_timeout}秒无输出，可能卡住 ({stuck_count}/{MAX_STUCK_COUNT})...")
+                    last_output_time = time.time()
+                    if stuck_count >= MAX_STUCK_COUNT:
+                        print(f"连续{stuck_count}次卡住，终止并重启...")
+                        process.terminate()
+                        process.wait(5)
+                        should_break = True
+                        stuck_terminated = True
+                        break
+                elif time.time() - start_time > CMD_TIMEOUT:
+                    print(f"\n总超时 ({CMD_TIMEOUT}秒)，终止命令")
                     process.terminate()
                     process.wait(5)
                     should_break = True
                     break
-            elif time.time() - start_time > CMD_TIMEOUT:
-                print(f"\n总超时 ({CMD_TIMEOUT}秒)，终止命令")
-                process.terminate()
-                process.wait(5)
-                should_break = True
-                break
 
         thread.join(5)
 
         if should_break:
+            # 卡死/总超时终止：打印 tdl 最后输出，便于诊断（限速？连接失败？）
+            if output_lines:
+                tail = 15
+                print(f"\n[卡死终止] tdl 最后输出 ({len(output_lines)} 行，显示最后 {min(tail, len(output_lines))} 行):")
+                for line in output_lines[-tail:]:
+                    print(f"  {line.strip()}")
             continue
 
         if output_lines:
@@ -276,14 +309,14 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None, ex
             print(f"\ntdl 无任何输出就退出了 (返回码 {process.returncode})，可能代理不通或 Telegram 限速")
 
         if process.returncode == 0:
-            return True
+            return True, stuck_terminated
 
-        if attempt < MAX_RETRIES - 1:
-            print(f"\n命令失败，返回码 {process.returncode}，重试 ({attempt + 1}/{MAX_RETRIES})...")
+        if attempt < retries - 1:
+            print(f"\n命令失败，返回码 {process.returncode}，重试 ({attempt + 1}/{retries})...")
 
-    print(f"\nError: 命令执行失败，已重试 {MAX_RETRIES} 次")
+    print(f"\nError: 命令执行失败，已重试 {retries} 次")
     print(f"最后命令: {' '.join(cmd)}")
-    return False
+    return False, stuck_terminated
 
 
 def export_channel(channel: str, limit: int, output_file: str, progress_cache: dict) -> bool:
@@ -298,7 +331,9 @@ def export_channel(channel: str, limit: int, output_file: str, progress_cache: d
                "-T", "last", "-i", str(limit), "--proxy", PROXY, "--with-content"]
         desc = f"导出频道: {channel} (全量模式，最近 {limit} 条)"
 
-    return run_cmd(cmd, desc)
+    # export 期间 stdout 几乎无输出，靠 stuck check 会误报；只看总超时
+    ok, _ = run_cmd(cmd, desc, enable_stuck_check=False)
+    return ok
 
 
 def _build_sequential_groups(file_list: list[dict]) -> set[str]:
@@ -475,10 +510,39 @@ def filter_and_download(
     # --continue 容易因残留 .tdl 缓存导致卡住，去掉
     # -t 2 并发下载（不要设太大，避免触发 Telegram 限速）
     need_download_count = len(pending_filenames) - len(already_exist)
-    cmd = [TDL_PATH, "dl", "-f", filtered_file, "-d", download_dir,
-           "--proxy", PROXY, "--skip-same", "-t", "2"]
-    dl_ok = run_cmd(cmd, f"下载 {channel} 的 {len(filtered)} 张图片到 {download_dir}",
-                    target_dir=download_dir, expected_count=need_download_count)
+
+    dl_ok = False
+    # 坏文件剔除循环：tdl 卡在某文件死重试时，识别遗留的 .tmp，
+    # 把对应文件从列表剔除后重试，避免因单个坏文件卡死整个频道
+    for bad_round in range(MAX_BAD_FILE_ROUNDS):
+        cmd = [TDL_PATH, "dl", "-f", filtered_file, "-d", download_dir,
+               "--proxy", PROXY, "--skip-same", "-t", "2"]
+        # 下载只重试 1 次：同列表重试坏文件无意义，靠外层剔除坏文件
+        ok, stuck = run_cmd(
+            cmd, f"下载 {channel} 的 {len(filtered)} 张图片到 {download_dir}",
+            target_dir=download_dir, expected_count=need_download_count,
+            no_output_timeout=DOWNLOAD_NO_OUTPUT_TIMEOUT, max_retries=1,
+        )
+        dl_ok = dl_ok or ok
+        if ok or not stuck:
+            break
+
+        # 卡死终止：扫描 .tmp 残留，剔除对应文件后进入下一轮
+        bad_files = {f[:-4] for f in os.listdir(download_dir)
+                     if f.endswith(".tmp")} if os.path.isdir(download_dir) else set()
+        if not bad_files:
+            print("卡死但未发现 .tmp 残留，无法定位坏文件，放弃")
+            break
+        print(f"⚠ 检测到坏文件 {len(bad_files)} 个，从列表剔除后重试: {sorted(bad_files)}")
+        filtered = [m for m in filtered if m.get("file") not in bad_files]
+        if not filtered:
+            print("剔除坏文件后无待下载图片，跳过")
+            break
+        # 重写 filtered.json，并更新 need_download_count
+        with open(filtered_file, "w", encoding="utf-8") as f:
+            json.dump({"id": data["id"], "messages": filtered}, f, ensure_ascii=False, indent=2)
+        pending_filenames = {m.get("file") for m in filtered if m.get("file")}
+        need_download_count = len(pending_filenames - cached_files)
 
     if not dl_ok:
         print(f"⚠ 下载命令执行失败，可能部分或全部图片未下载成功")
@@ -502,16 +566,20 @@ def filter_and_download(
         print(f"下载完成: 新增 {downloaded} 张, 跳过重复 {skipped} 张")
 
     max_id = max(
-        (m.get("id", 0) for m in messages if isinstance(m.get("id"), int)),
+        (m.get("id", 0) for m in messages if isinstance(m.get("id", int), int)),
         default=0,
     )
     if max_id > 0:
-        progress_cache[channel] = {
-            "last_id": max_id,
-            "last_time": datetime.now().isoformat(),
-        }
-        save_json_cache(PROGRESS_CACHE_FILE, progress_cache)
-        print(f"已记录进度: 频道 {channel} 最后消息ID: {max_id}")
+        if dl_ok:
+            progress_cache[channel] = {
+                "last_id": max_id,
+                "last_time": datetime.now().isoformat(),
+            }
+            save_json_cache(PROGRESS_CACHE_FILE, progress_cache)
+            print(f"已记录进度: 频道 {channel} 最后消息ID: {max_id}")
+        else:
+            # 下载失败不推进进度，避免没下成的文件被永久跳过（下次重试）
+            print(f"⚠ 下载未成功，保留旧进度（不推进到 {max_id}），下次将重试本批")
 
     if os.path.exists(filtered_file):
         os.remove(filtered_file)
