@@ -2,6 +2,23 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-08-30 admin 审核新增十六宫格
+
+- **改动**（`admin/admin.html`）：宫格下拉新增「十六宫格 (16张)」，按钮文案映射表加 `16:'十六'`。列数固定 4 列不动，16 张即 4 行，`.limit(gridSize)` 原本就参数化，无其它改动。
+- **验证**：内联 script 语法检查通过；两处标记 grep 确认。
+
+## 2026-08-28 工具加机器人控制三按钮 + 日志左右分屏
+
+- **改动**（`tools/gui.py` + 重建 `木偶鱼工具.exe`）：
+  - 第三行按钮：🤖 启动机器人 / ⏹ 停止机器人 / 🧹 清理所有进程（互斥禁用，后台线程执行，过程写机器人日志面板）
+    - 启动 = 删 `logs\STOPPED` + NapCat 不在才经计划任务拉起（在跑则跳过，防重启 QQ 触发风控）+ 8080 未监听才 wscript `silent_start_bot.vbs`
+    - 停止 = 写 STOPPED + 杀 8080 监听 python 及所有 cmdline 含 bot.py 的 python（含历史残留实例），**不动 NapCat/QQ**
+    - 清理 = 跑 qqbot `一键停止.bat /auto`（bot + NapCat/QQ + 看门狗暂停，GBK 输出流式回显）+ 兜底清 bot.py 残留
+  - 日志区改左右分屏（`ttk.PanedWindow`）：左侧工具日志原样；右侧机器人日志 = 每秒 tail `qqbot/logs/bot.log`（UTF-8 解码、剥 loguru ANSI 色码、打开回看末 8KB、超 10MB 轮转自动重置、3000 行封顶），与状态面板同源，bot 由谁启动都能看
+  - 窗口 800x600 → 1000x620
+- **验证**：py_compile 通过；只读探测单测（8080 监听=True、NapCat=True、枚举到 2 个 bot.py 含残留旧实例）；GUI 冒烟（分屏两面板就位、botlog 实时追到当前秒日志、无 ANSI 残留、半截首行已跳过）；exe 重建 → 覆盖根目录 → 5 秒存活冒烟通过
+- **注意**：本机 Python 子进程 text 模式默认 UTF-8，而 netstat/tasklist/wmic 输出 GBK，`subprocess.run(..., text=True)` 会解码崩——所有系统命令捕获显式 `encoding="gbk", errors="replace"`
+
 ## 2026-08-27 审核三态勾选框 + 转发群组分类 + 工具改开本地后台
 
 - **改动**（`admin/admin.html`）：

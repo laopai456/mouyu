@@ -451,6 +451,7 @@
                   <div onclick="switchReviewMode('grid', 4)">四宫格 (4张)</div>
                   <div onclick="switchReviewMode('grid', 8)">八宫格 (8张)</div>
                   <div onclick="switchReviewMode('grid', 12)">十二宫格 (12张)</div>
+                  <div onclick="switchReviewMode('grid', 16)">十六宫格 (16张)</div>
                 </div>
               </div>
             </div>
@@ -727,7 +728,7 @@
       } else {
         listBtn.classList.remove('btn-primary');
         gridBtn.classList.add('btn-primary');
-        gridBtn.textContent = ({4:'四', 8:'八', 12:'十二'}[gridSize] || gridSize) + '宫格 ▾';
+        gridBtn.textContent = ({4:'四', 8:'八', 12:'十二', 16:'十六'}[gridSize] || gridSize) + '宫格 ▾';
         listContainer.classList.add('hidden');
         gridContainer.classList.remove('hidden');
         if (batchActions) batchActions.style.display = 'flex';
