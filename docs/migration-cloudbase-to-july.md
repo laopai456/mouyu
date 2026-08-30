@@ -1,7 +1,32 @@
 # 木偶鱼PF 云开发数据迁移方案：mouyu 环境 → july 环境
 
-> **状态：预案，未执行。** 写于 2026-08-30。触发条件见 §0。执行时从 §1 开始按序操作。
+> **状态：预案，未执行。** 写于 2026-08-30，同日增补「轻量模式」。触发条件见 §0。执行时从 §1 开始按序操作。
 > 本文档 + `tools/migration/` 脚本配套使用，脚本均可 `--dry-run`。
+
+---
+
+## ★ 轻量模式（2026-08-30 追加：原图不保留，只要代码和逻辑能跑）
+
+用户已确认：**旧图可以丢弃**，迁移目标是「代码 + 原本能跑的逻辑」在新环境继续运行。相对完整模式大幅简化：
+
+| 完整模式做的事 | 轻量模式 |
+|---|---|
+| §2 导出全部集合（01_export） | **跳过**（无数据要搬） |
+| §3 桶到桶拷贝（02_copy） | **跳过**（旧图不要） |
+| §4 导入 + fileID 改写（03_import） | **跳过**；改为在 july 环境建空集合 `mouyu_images`（首次写入自动建，无需手工） |
+| fileID 全量改写 | **跳过**（没有旧 fileID） |
+| §5 部署云函数/触发器/共享/匿名登录 | **照做**（这是"逻辑能跑"的全部本体） |
+| §6 客户端切换 | **照做** |
+| §7 对账 | 简化为功能验证：上传→触发→审核→随机图→转发 全链路打一遍 |
+
+轻量模式仍值得带过去的 3 个小集合（可选，数据量极小，控制台手动导出/手抄即可）：
+- `qrcode` → `mouyu_qrcode`：联系设置/二维码配置（admin「联系设置」tab + 小程序首页直读，见 `pages/index/index.js:140`）
+- `md5_blacklist` → `mouyu_md5_blacklist`：拒绝图黑名单（防止重新上传时旧烂图再进池）
+- `users` → `mouyu_users`：就几条 openid/role 记录（admin 权限）
+
+**图池重建（可选福利）**：`C:\Users\w\Downloads\tdl` 本地还存着历史下载的原图。清掉 `tools/uploader/cache/md5_cache.json` 后跑一次上传，即可把本地图全量重灌进新环境（autoCleanup 会自己按 2000 张阈值滚动清理）。
+
+轻量模式的困难点与完整模式相同，见 §0 前置确认与 §10 风险——**唯一硬门槛仍是"两小程序同主体"**（只影响小程序端；qqbot/admin 不走环境共享，见 §0 追注）。
 
 ---
 
@@ -25,6 +50,7 @@
 ### 前置确认清单（全部打勾才能开工）
 
 1. **两个小程序同一主体**（同一微信号注册）。云开发「环境共享」仅支持同主体。确认方式：微信公众平台→账号信息，两个 appid 的主体一致。
+   **追注（2026-08-30）**：环境共享只影响**小程序端**。qqbot（HTTP gateway 直连）和 admin（web SDK 匿名登录）不经过小程序端链路，**不同主体也能迁**——那种情况下小程序展示功能退役，转发群组 + 审核上传链路照常存活。
 2. july 环境套餐**未到期**且容量/调用配额足够（mouyu 数据量级：images <1000 条、桶内对象 <1000 个，量很小）。
 3. 腾讯云密钥（`tools/uploader/config.json` 里那对 SecretId/Key）具备权限：COS（两桶读写）、TCB（云开发数据库 admin 读写）。若密钥权限不足 → 用 §9 Plan B（控制台手动导）。
 4. 旧环境到期日已知，且距执行日 **≥7 天**（留验证+回滚窗口）。
@@ -106,6 +132,7 @@ node 03_import.js                # 实际写入：保留原 _id，逐条 add；�
 | `cloudfunctions/cosUploadHandler/index.js` | `cloud://MOYU_ENV_ID_PLACEHOLDER.${bucket}` → `cloud://JULY_ENV_ID_PLACEHOLDER.${bucket}`（该函数用 `DYNAMIC_CURRENT_ENV`，改死目标 envId 模板） |
 | `admin/admin.html` | `ENV_ID` 改 `JULY_ENV_ID_PLACEHOLDER`；`collection('images')`→`mouyu_images`、`collection('qrcode')`→`mouyu_qrcode`（getPendingCount 等 where 不变） |
 | `qqbot/plugins/mouyu_forward.py` | L77 `/collections/images/documents` → `/collections/mouyu_images/documents`；文件头注释同步 |
+| `pages/index/index.js` | L140 `db.collection('qrcode')` → `db.collection('mouyu_qrcode')`（小程序端唯一直连 DB 处） |
 | `tools/uploader/config.json` | `cos.bucket` 改目标桶名，`env_id` 改目标 env |
 | `tools/gui.py` + `tools/tdl_downloader/tdl_downloader_v2.py` | `ADMIN_URL` 若保留托管回退，改 july 托管地址；本地 admin 优先不受影响 |
 | `.github/workflows/daily-job.yml` | 已停用；若重启需同步 env/桶（scripts/*.js 引用已失效，本方案不处理） |
