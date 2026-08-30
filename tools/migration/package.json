@@ -1,0 +1,15 @@
+{
+  "name": "mouyu-migration",
+  "private": true,
+  "description": "木偶鱼 云开发环境 → july 环境迁移脚本（预案，见 docs/migration-cloudbase-to-july.md）",
+  "scripts": {
+    "export": "node 01_export.js",
+    "copy": "node 02_copy_files.js",
+    "import": "node 03_import.js",
+    "verify": "node 04_verify.js"
+  },
+  "dependencies": {
+    "@cloudbase/node-sdk": "^4.0.0",
+    "cos-nodejs-sdk-v5": "^2.13.0"
+  }
+}

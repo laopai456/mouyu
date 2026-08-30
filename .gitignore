@@ -22,3 +22,8 @@ build/
 
 # Python bytecode
 tools/**/__pycache__/
+
+# 迁移脚本（docs/migration-cloudbase-to-july.md）：真实密钥与产物不入库
+tools/migration/config.json
+tools/migration/staging/
+tools/migration/node_modules/

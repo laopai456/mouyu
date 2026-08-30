@@ -2,6 +2,16 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-08-30 云开发到期迁移预案（mouyu env → july env）
+
+- **产出**（**预案未执行**，触发条件=云开发套餐到期不续）：
+  - `docs/migration-cloudbase-to-july.md`：完整迁移方案。核心拓扑已核对（2026-08-30）：mouyu env `MOYU_ENV_ID_PLACEHOLDER`（appid touristappid，桶 `636c-...-1414730090` ap-shanghai）→ july env `JULY_ENV_ID_PLACEHOLDER`（appid JULY_APPID_PLACEHOLDER，西瓜太浪hd）
+  - 关键决策：①mouyu 6 集合迁入加 `mouyu_` 前缀（july 有同名 `users` 集合，必冲突）②fileID 全量改写（`cloud://env.bucket/key` 双变化，images 的 fileID+url 两字段）③COS 服务端桶到桶 copyObject（不落本地）④保留 _id（qqbot mouyu_state 不重推）⑤只增不删→回滚=各端 env 指回旧环境
+  - `tools/migration/`：4 个可直接跑的 Node 脚本（01 导出+fileID映射 / 02 桶拷贝带断点 / 03 导入加前缀改fileID幂等 / 04 对账验证），全部支持 --dry-run；依赖 `npm i`（@cloudbase/node-sdk + cos-nodejs-sdk-v5）；config.json 放真实密钥已 gitignore（模板 config.example.json）
+  - 代码改动清单（集合改名波及面）已列进方案 §5.1：13 云函数 + admin.html + qqbot mouyu_forward.py(L77 集合路径) + uploader config + gui/tdl 的 ADMIN_URL
+- **验证**：4 脚本 node --check 通过；json 模板可解析。未连真实环境跑（按需求"现在不用"）
+- **执行前置**（方案 §0）：两小程序同主体确认、july 默认桶名/地域查填、密钥有 TCB+COS 权限、旧环境到期≥7 天
+
 ## 2026-08-30 admin 审核新增十六宫格
 
 - **改动**（`admin/admin.html`）：宫格下拉新增「十六宫格 (16张)」，按钮文案映射表加 `16:'十六'`。列数固定 4 列不动，16 张即 4 行，`.limit(gridSize)` 原本就参数化，无其它改动。

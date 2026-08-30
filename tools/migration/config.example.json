@@ -1,0 +1,17 @@
+{
+  "source": {
+    "envId": "MOYU_ENV_ID_PLACEHOLDER",
+    "bucket": "636c-MOYU_ENV_ID_PLACEHOLDER-1414730090",
+    "region": "ap-shanghai"
+  },
+  "target": {
+    "envId": "JULY_ENV_ID_PLACEHOLDER",
+    "bucket": "<执行时去 july 云开发控制台-云存储-概览 查默认桶名替换>",
+    "region": "<执行时查 july 环境地域替换，如 ap-shanghai>"
+  },
+  "secretId": "<同 tools/uploader/config.json 的 cos.secret_id>",
+  "secretKey": "<同 tools/uploader/config.json 的 cos.secret_key>",
+  "collectionPrefix": "mouyu_",
+  "collections": ["images", "users", "like_logs", "dislike_logs", "md5_blacklist", "qrcode"],
+  "stagingDir": "./staging"
+}
