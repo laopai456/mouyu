@@ -2,6 +2,24 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-02 admin 批量上传 → 重新载入
+
+- **需求**：图片上传实际走 uploader.py（COS 直传），admin 页里的批量上传是冗余功能，改成一键「重新载入」——刷新顶部统计数量 + 当前 tab 的图片列表。
+- **改动**（`admin/admin.html`）：
+  - tab 栏「批量上传」→「🔄 重新载入」按钮（紫色强调样式，非 tab，不切页），点击调用新增 `reloadAll()`：`loadStats()` + 按 `currentTab` 刷新对应列表（pending→`loadBatchImages`，passed/forward/rejected→`loadImages`，qrcode→`loadQRCode`，monthDelete→`loadMonthList`）。
+  - 整块移除上传功能：uploadTab HTML（拖拽区/预览/开始上传）、`setupDropZone/handleFiles/renderPreview/removeFile/clearPreview/calculateMD5/startUpload` 全部 JS、`selectedFiles` 变量、`drop-zone/preview-item/upload-actions` CSS、spark-md5 CDN 引用。二维码上传（`saveQRCode`，走 uploadFile 云函数）是独立逻辑，保留未动。
+  - `switchTab` 增加 `currentTab` 跟踪（初始 'qrcode'，与 HTML 默认 active 一致）。
+- **验证**：内联 script `node --check` 通过；div/button 标签配平（112/112、35/35）；本地 http.server 起服 curl 确认页面含「重新载入」且无批量上传残留；无任何对已删符号的悬空引用（grep 全空）。
+- **注意**：admin.html 由本地工具（exe 内嵌 server，no-store）直出磁盘文件，无需重打包；浏览器强刷即生效。若当时 9000 端口的旧服务被误杀，点工具里「打开审核」会自动重启。
+
+## 2026-09-02 md5 查重补上 status=3（转发群组）口径
+
+- **问题**：一张图被勾成转发群组（status=3）后，三条上传通道的 md5 查重都不含 3——同图可再次入库（admin 批量上传查 {0,1}，autoUpload/addImage 云函数查 {0,1,2}）。qqbot 群收集与 admin 手动互查时都会漏。
+- **改动**：`cloudfunctions/autoUpload/index.js`、`cloudfunctions/addImage/index.js` 查重改为 `in([0,1,2,3])`；`admin/admin.html` 批量上传查重改为 `in([0,1,3])`——status=2（拒绝）在 admin 端**有意**保持不拦（被拒的图允许手动重传），收集端云函数仍拦 2（自动管线不收死图）。
+- **未动**：`cosUploadHandler`（COS 事件兜底通道，事件里拿不到 md5，只能按 fileID 去重）。
+- **验证**：三个文件语法检查通过（node --check / 内联 script 提取检查）。
+- **待办（人工）**：autoUpload、addImage 两个云函数需在微信开发者工具右键「上传并部署：云端安装依赖」重新部署后才在云端生效；admin.html 由本地工具直出（no-store），强刷即生效。已入库的历史重复不追溯，仅拦新增。
+
 ## 2026-08-30 云开发到期迁移预案（mouyu env → july env）
 
 - **产出**（**预案未执行**，触发条件=云开发套餐到期不续）：
