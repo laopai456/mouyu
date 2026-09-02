@@ -156,13 +156,30 @@ class ImageUploader:
                     return
             
             md5 = self.calculate_md5(file_path)
-            
+
             if md5 in self.md5_cache:
                 self.logger.info(f"重复图片，删除本地文件: {file_path}")
                 try:
                     os.remove(file_path)
                 except Exception as e:
                     self.logger.error(f"删除重复图片失败: {e}")
+                return
+
+            # 传 COS 前先服务端查重，避免重复图在 COS 落对象、再被 COS 触发器写成重复待审记录
+            check = self.check_md5_on_server(md5)
+            if check['duplicate']:
+                reason = '黑名单' if check['blacklisted'] else '重复'
+                self.logger.info(f"{reason}图片(服务端)，删除本地文件: {file_path}")
+                self.md5_cache[md5] = {
+                    'file_id': None,
+                    'upload_time': datetime.now().isoformat(),
+                    'file_path': file_path
+                }
+                self.save_md5_cache()
+                try:
+                    os.remove(file_path)
+                except Exception as e:
+                    self.logger.error(f"删除{reason}图片失败: {e}")
                 return
 
             file_ext = Path(file_path).suffix.lower()
@@ -210,8 +227,23 @@ class ImageUploader:
                     except Exception as e:
                         self.logger.error(f"清理本地文件失败: {e}")
             else:
-                self.logger.error(f"数据库写入失败: {db_result.get('message', '未知错误')} - {file_path}")
-            
+                fail_msg = db_result.get('message', '未知错误')
+                if '已存在' in fail_msg or '永久拒绝' in fail_msg:
+                    # 服务端查重兜底（checkMd5 之后才被其他通道抢先入库的竞态）：同样删文件+记缓存，防止下轮重复撞
+                    self.logger.info(f"重复图片(服务端拒绝)，删除本地文件: {file_path}")
+                    self.md5_cache[md5] = {
+                        'file_id': None,
+                        'upload_time': now.isoformat(),
+                        'file_path': file_path
+                    }
+                    self.save_md5_cache()
+                    try:
+                        os.remove(file_path)
+                    except Exception as e:
+                        self.logger.error(f"删除重复图片失败: {e}")
+                else:
+                    self.logger.error(f"数据库写入失败: {fail_msg} - {file_path}")
+
             return
         
         self.logger.error(f"达到最大重试次数，上传失败: {file_path}")
@@ -276,6 +308,31 @@ class ImageUploader:
         except Exception as e:
             self.logger.error(f"写入数据库异常: {str(e)}")
             return {'success': False, 'message': str(e)}
+
+    def check_md5_on_server(self, md5):
+        """上传前服务端查重。返回 {'duplicate', 'blacklisted'}；查询本身失败则放行，由 addImage 阶段兜底。"""
+        try:
+            event_data = {'action': 'checkMd5', 'md5': md5}
+
+            req = models.InvokeRequest()
+            req.FunctionName = 'autoUpload'
+            req.Namespace = self.env_id
+            req.ClientContext = json.dumps(event_data, ensure_ascii=False)
+
+            resp = self.scf_client.Invoke(req)
+            ret_msg = json.loads(resp.Result.RetMsg)
+
+            if not ret_msg.get('success'):
+                self.logger.warning(f"服务端查重调用失败，按正常流程继续: {ret_msg.get('message', '未知错误')}")
+                return {'duplicate': False, 'blacklisted': False}
+
+            return {
+                'duplicate': bool(ret_msg.get('exists') or ret_msg.get('blacklisted')),
+                'blacklisted': bool(ret_msg.get('blacklisted'))
+            }
+        except Exception as e:
+            self.logger.warning(f"服务端查重异常，按正常流程继续: {str(e)}")
+            return {'duplicate': False, 'blacklisted': False}
 
 def main():
     config_file = Path(__file__).parent / 'config.json'

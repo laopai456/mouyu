@@ -2,6 +2,18 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-02 uploader 服务端重复图不删本地文件的根因修复 + 传前查重
+
+- **现象**：日志报「✗ 该图片已存在，请勿重复上传」，但文件仍留在源文件夹，每轮重扫都会再撞一遍。
+- **根因（两层）**：
+  1. `uploader.py`：本地缓存查重（`md5 in cache`）会删文件，但服务端返回「已存在」走的是 `db_result['success']=False` 分支——只 error 日志，**不删文件也不记缓存**。
+  2. 更深一层：上传顺序是「先传 COS → 再调云函数查重」，COS 触发器（cosUploadHandler）只按 fileID 去重（事件里拿不到 md5），而重复图每次上传的文件名带时间戳、fileID 必然不同——**重复图先落 COS 对象、触发器写一条新待审记录，之后才被 autoUpload 按 md5 拒掉**。即：库进重复待审图 + COS 落孤儿对象。
+- **改动**：
+  - `tools/uploader/uploader.py`：(a) md5 算出后、传 COS 前新增 `check_md5_on_server()`（调 autoUpload 新动作 `checkMd5`），查到重复/黑名单 → 删本地文件 + md5 记入本地缓存（file_id=None 的 marker）；(b) addImage 阶段返回「已存在/永久拒绝」的兜底分支同样删文件+记缓存（防其他通道竞态抢先入库）。查重调用失败/云函数未部署 → 放行走原流程，不卡上传。
+  - `cloudfunctions/autoUpload/index.js`：新增 `checkMd5` 动作，查 images（status in [0,1,2,3]）+ md5_blacklist，口径与 addImage 完全一致。
+- **验证**：py_compile / node --check 通过；check_md5_on_server 用桩 SCF 客户端单测 5 分支（库中存在/黑名单/新图放行/未部署 Unknown action/网络异常）全部符合预期。
+- **待办（人工）**：autoUpload 云函数需再次在微信开发者工具上传部署（上午部署的版本不含 checkMd5；部署前 uploader 自动降级为老流程——重复仅本地文件暂留，不会再进库）。存量库里经审计无重复（见下一条），无需清理。
+
 ## 2026-09-02 全库 md5 判重审计：0 组重复，「存量重复」系 _id 前缀误读（虚惊）
 
 - **起因**：上午修完 status=3 查重口径后，我汇报"库里 24 张 status=3 有同图重复入库（同 md5 前缀、不同 key）"，用户要求清理存量。

@@ -18,6 +18,28 @@ exports.main = async (event, context) => {
     }
   }
 
+  if (action === 'checkMd5') {
+    // 上传前查重：uploader 在传 COS 前调用，避免重复图先落 COS 再被触发器写成重复待审记录
+    const { md5 } = event;
+    if (!md5) return { success: true, exists: false, blacklisted: false };
+
+    const db = cloud.database();
+    try {
+      // status: 0待审 1过审 2拒绝 3转发群组——与 addImage 查重口径一致
+      const [existRes, blacklistRes] = await Promise.all([
+        db.collection('images').where({ md5, status: db.command.in([0, 1, 2, 3]) }).count(),
+        db.collection('md5_blacklist').where({ md5 }).count()
+      ]);
+      return {
+        success: true,
+        exists: existRes.total > 0,
+        blacklisted: blacklistRes.total > 0
+      };
+    } catch (err) {
+      return { success: false, message: err.message };
+    }
+  }
+
   if (action === 'addImage') {
     const { fileID, md5 } = event;
     const db = cloud.database();
