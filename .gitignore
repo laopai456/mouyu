@@ -35,3 +35,5 @@ tools/config.local.json
 # TG 会话与运行时缓存（严禁入库）
 tools/tdl_downloader/tdl-export.json
 __pycache__/
+# 小程序个人配置（含真实 AppID，DevTools 优先读这里）
+project.private.config.json

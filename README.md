@@ -349,6 +349,7 @@ const filtered = result.data.filter(img => img.reviewTime >= time);
 | `env.local.js`（根目录） | 小程序 `wx.cloud.init` 的环境 ID | 复制 `env.local.example.js` 填入 |
 | `admin/config.local.js` | 审核后台的环境 ID 与管理员 openid | 复制 `admin/config.local.example.js` 填入 |
 | `tools/config.local.json` | 判重审计脚本 `tools/db_dedup_check.js` 的配置 | 复制 `tools/config.local.example.json` 填入 |
+| `project.private.config.json` | 小程序真实 AppID（DevTools 优先读取，覆盖 project.config.json 的 touristappid） | 本地新建，写入 `"appid": "你的AppID"`，文件已被 gitignore |
 | 云函数环境变量 `ADMIN_OPENIDS` | admin / addImage / deleteImages 的白名单（逗号分隔 openid；admin 另有 `CREATOR_OPENIDS`，缺省同 ADMIN） | 云开发控制台→云函数→配置→环境变量 |
 | 云函数环境变量 `ENV_ID` | cosUploadHandler 拼 fileID 用的环境 ID（缺失时安全跳过不写库） | 同上 |
 | 环境变量 `MOYU_ADMIN_URL` | tools/gui.py 的托管后台回退地址（打包 exe 不受影响） | 本地运行 gui.py 时设置 |

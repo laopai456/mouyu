@@ -9,6 +9,7 @@
 - **结构改造（防再泄漏）**：小程序 `app.js`、审核后台 `admin/admin.html`、审计脚本 `tools/db_dedup_check.js` 改读 gitignore 的本地配置（example 模板入库）；admin/addImage/deleteImages 白名单改读云函数环境变量 `ADMIN_OPENIDS`（缺省空名单=拒绝，fail-safe）；cosUploadHandler 的 fileID 环境 ID 改读 `ENV_ID` 变量、缺失跳过不写坏数据；gui.py 回退地址改读 `MOYU_ADMIN_URL`。`.gitignore` 补 `tdl-export.json`（TG 会话！）、`__pycache__/`、三个 config.local。
 - **代价**：本地 md5 缓存被历史清理连带删掉（自动重建，云端 md5 查重兜底）；README 新增「本地部署配置」表。
 - **待办（人工，重新部署云函数前必做）**：云开发控制台给 admin/addImage/deleteImages 配 `ADMIN_OPENIDS`、给 cosUploadHandler 配 `ENV_ID`，否则下次部署后管理操作会被拒、COS 触发器会跳过写库。旧部署未动，当前线上不受影响。
+- **补记**：四项环境变量已配置+新代码已部署（16:53–16:54），匿名探测全绿（admin 真 openid isAdmin:true、伪造 COS 事件实测 ENV_ID 拼出真实 fileID 后清理）。`project.config.json` 的 appid 脱敏成 touristappid 后 DevTools 报「更改 AppID 失败」——真实 AppID 改放 `project.private.config.json`（DevTools 优先读、已出库+gitignore）。
 
 ## 2026-09-02 uploader 服务端重复图不删本地文件的根因修复 + 传前查重
 
