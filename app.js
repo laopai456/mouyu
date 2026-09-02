@@ -4,7 +4,7 @@ App({
       console.error('请使用 2.2.3 或以上的基础库以使用云能力');
     } else {
       wx.cloud.init({
-        env: 'MOYU_ENV_ID_PLACEHOLDER',
+        env: require('./env.local.js').ENV_ID,
         traceUser: true,
       });
     }

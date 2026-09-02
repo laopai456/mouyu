@@ -14,9 +14,17 @@
 const cloudbase = require('@cloudbase/js-sdk');
 const fs = require('fs');
 
-const ENV_ID = 'MOYU_ENV_ID_PLACEHOLDER';
-const ADMIN_OPENID = 'ADMIN_OPENID_1_PLACEHOLDER'; // deleteImages 云函数白名单开发者
-const STATE_FILE = 'C:/Users/w/Documents/GitHub/qqbot/data/mouyu_state.json';
+// 配置读同目录 config.local.json（gitignore，模板见 config.local.example.json）：
+// { "envId": "cloudbase-xxx", "adminOpenid": "oXXX", "stateFile": "C:/.../mouyu_state.json" }
+let CFG = {};
+try { CFG = JSON.parse(fs.readFileSync(__dirname + '/config.local.json', 'utf8')); } catch {}
+const ENV_ID = CFG.envId || '';
+const ADMIN_OPENID = CFG.adminOpenid || '';
+const STATE_FILE = CFG.stateFile || '';
+if (!ENV_ID || !ADMIN_OPENID) {
+  console.error('缺配置：复制 tools/config.local.example.json 为 config.local.json 并填入真实值');
+  process.exit(1);
+}
 const DO_DELETE = process.argv.includes('--delete');
 
 async function main() {

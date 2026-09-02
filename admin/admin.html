@@ -507,9 +507,9 @@
     </div>
   </div>
 
-  <script>
-    const ENV_ID = 'MOYU_ENV_ID_PLACEHOLDER';
-    const DEVELOPER_OPENIDS = ['ADMIN_OPENID_1_PLACEHOLDER'];
+  <script src="config.local.js"></script>
+    const ENV_ID = (window.CLOUD_CONFIG && window.CLOUD_CONFIG.envId) || 'MOYU_ENV_ID_PLACEHOLDER';
+    const DEVELOPER_OPENIDS = (window.CLOUD_CONFIG && window.CLOUD_CONFIG.adminOpenids) || [];
     
     let app = null;
     let db = null;

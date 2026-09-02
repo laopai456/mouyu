@@ -1,0 +1,5 @@
+{
+  "envId": "你的云开发环境ID",
+  "adminOpenid": "你的微信openid",
+  "stateFile": "C:/path/to/qqbot/data/mouyu_state.json"
+}

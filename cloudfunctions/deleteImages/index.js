@@ -4,10 +4,8 @@ cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 
 const db = cloud.database();
 
-const DEVELOPER_OPENIDS = [
-  'ADMIN_OPENID_1_PLACEHOLDER',
-  'ADMIN_OPENID_2_PLACEHOLDER'
-];
+// 白名单读环境变量（云开发控制台→云函数→配置→环境变量，逗号分隔；未配置=空名单=拒绝管理操作）
+const DEVELOPER_OPENIDS = (process.env.ADMIN_OPENIDS || '').split(',').map(s => s.trim()).filter(Boolean);
 
 exports.main = async (event, context) => {
   const { action, imageIds, id, md5, adminOpenid } = event;

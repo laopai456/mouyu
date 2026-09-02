@@ -48,7 +48,7 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 INCLUDE_TYPES = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
 # 托管版后台（本地 admin.html 缺失时的回退）
-ADMIN_URL = "https://MOYU_ENV_ID_PLACEHOLDER-1414730090.tcloudbaseapp.com/admin.html"
+ADMIN_URL = os.environ.get("MOYU_ADMIN_URL", "https://MOYU_ENV_ID_PLACEHOLDER-1414730090.tcloudbaseapp.com/admin.html")
 ADMIN_DIR = EXE_DIR / "admin"
 LOCAL_ADMIN_PORT = 9000
 admin_server = None

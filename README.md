@@ -340,6 +340,23 @@ const filtered = result.data.filter(img => img.reviewTime >= time);
 
 ---
 
+## 本地部署配置（开源脱敏说明）
+
+仓库已做历史脱敏，真实值一律放在 gitignore 的本地文件/控制台环境变量里：
+
+| 位置 | 作用 | 做法 |
+| --- | --- | --- |
+| `env.local.js`（根目录） | 小程序 `wx.cloud.init` 的环境 ID | 复制 `env.local.example.js` 填入 |
+| `admin/config.local.js` | 审核后台的环境 ID 与管理员 openid | 复制 `admin/config.local.example.js` 填入 |
+| `tools/config.local.json` | 判重审计脚本 `tools/db_dedup_check.js` 的配置 | 复制 `tools/config.local.example.json` 填入 |
+| 云函数环境变量 `ADMIN_OPENIDS` | admin / addImage / deleteImages 的白名单（逗号分隔 openid；admin 另有 `CREATOR_OPENIDS`，缺省同 ADMIN） | 云开发控制台→云函数→配置→环境变量 |
+| 云函数环境变量 `ENV_ID` | cosUploadHandler 拼 fileID 用的环境 ID（缺失时安全跳过不写库） | 同上 |
+| 环境变量 `MOYU_ADMIN_URL` | tools/gui.py 的托管后台回退地址（打包 exe 不受影响） | 本地运行 gui.py 时设置 |
+
+云函数未配置 `ADMIN_OPENIDS` 时白名单为空，所有管理操作会被拒绝（fail-safe）。
+
+---
+
 ## 许可证
 
 MIT 许可证开源

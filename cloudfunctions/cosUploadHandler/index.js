@@ -2,6 +2,8 @@ const cloud = require('wx-server-sdk');
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 
+const ENV_ID = process.env.ENV_ID || ''; // 控制台配置；缺失时跳过写库，防止写出坏 fileID
+
 exports.main = async (event, context) => {
   const db = cloud.database();
   
@@ -30,7 +32,13 @@ exports.main = async (event, context) => {
         continue;
       }
       
-      const fileID = `cloud://MOYU_ENV_ID_PLACEHOLDER.${bucket}/${key}`;
+      if (!ENV_ID) {
+        console.error('缺少 ENV_ID 环境变量，跳过该事件（云开发控制台→云函数→环境变量）');
+        results.push({ record, status: 'error', message: 'missing ENV_ID env var' });
+        continue;
+      }
+      
+      const fileID = `cloud://${ENV_ID}.${bucket}/${key}`;
       
       const now = new Date();
       const month = now.getMonth() + 1;

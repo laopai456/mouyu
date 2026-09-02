@@ -2,6 +2,14 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-02 开源脱敏：全历史重写清除环境ID/openid/appid，真实值改走本地配置
+
+- **背景**：仓库确认对外公开（MIT），但历史里散布云开发环境 ID（两个）、开发者 openid（两个）、小程序 appid（两个）、TG 下载缓存（含频道号）——匿名登录 + 公开 openid 意味着任何人可读库甚至伪装管理员删库，必须清。
+- **历史重写**（git filter-repo，备份 `../mouyu-pre-scrub-backup.bundle`）：replace-text 六组值→占位符；`tools/tdl_downloader/cache/md5_cache.json` 与 `__pycache__` 整体出历史（仅改缓存的两个空提交被剪，117→115）；作者邮箱→GitHub noreply。重写后全历史 grep 敏感串=0。
+- **结构改造（防再泄漏）**：小程序 `app.js`、审核后台 `admin/admin.html`、审计脚本 `tools/db_dedup_check.js` 改读 gitignore 的本地配置（example 模板入库）；admin/addImage/deleteImages 白名单改读云函数环境变量 `ADMIN_OPENIDS`（缺省空名单=拒绝，fail-safe）；cosUploadHandler 的 fileID 环境 ID 改读 `ENV_ID` 变量、缺失跳过不写坏数据；gui.py 回退地址改读 `MOYU_ADMIN_URL`。`.gitignore` 补 `tdl-export.json`（TG 会话！）、`__pycache__/`、三个 config.local。
+- **代价**：本地 md5 缓存被历史清理连带删掉（自动重建，云端 md5 查重兜底）；README 新增「本地部署配置」表。
+- **待办（人工，重新部署云函数前必做）**：云开发控制台给 admin/addImage/deleteImages 配 `ADMIN_OPENIDS`、给 cosUploadHandler 配 `ENV_ID`，否则下次部署后管理操作会被拒、COS 触发器会跳过写库。旧部署未动，当前线上不受影响。
+
 ## 2026-09-02 uploader 服务端重复图不删本地文件的根因修复 + 传前查重
 
 - **现象**：日志报「✗ 该图片已存在，请勿重复上传」，但文件仍留在源文件夹，每轮重扫都会再撞一遍。

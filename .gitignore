@@ -27,3 +27,11 @@ tools/**/__pycache__/
 tools/migration/config.json
 tools/migration/staging/
 tools/migration/node_modules/
+
+# 本地真实值配置（开源仓库只留 *.example 模板）
+admin/config.local.js
+env.local.js
+tools/config.local.json
+# TG 会话与运行时缓存（严禁入库）
+tools/tdl_downloader/tdl-export.json
+__pycache__/
