@@ -41,8 +41,9 @@ exports.main = async (event, context) => {
     }
 
     if (md5) {
+      // status: 0待审 1过审 2拒绝 3转发群组——3 也算重复，防止勾转后同图再入库
       const [existRes, blacklistRes] = await Promise.all([
-        db.collection('images').where({ md5, status: db.command.in([0, 1, 2]) }).count(),
+        db.collection('images').where({ md5, status: db.command.in([0, 1, 2, 3]) }).count(),
         db.collection('md5_blacklist').where({ md5 }).count()
       ]);
 

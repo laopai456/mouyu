@@ -2,6 +2,14 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-02 全库 md5 判重审计：0 组重复，「存量重复」系 _id 前缀误读（虚惊）
+
+- **起因**：上午修完 status=3 查重口径后，我汇报"库里 24 张 status=3 有同图重复入库（同 md5 前缀、不同 key）"，用户要求清理存量。
+- **审计结果**（`@cloudbase/js-sdk` 匿名登录全量翻页，1100 条）：md5 重复组 **0**、fileID 重复组 **0**、空 md5 0 条；47 张 status=3 的 md5 两两不同。**库里没有重复图，无需删除。**
+- **误判根因**：当时按 `_id[:8]` 分组当成了 md5 前缀——实际那是 TCB 自动 id 的**批次前缀**（同批/同通道入库的文档共享，全库仅 `3dcd4ae6/a9defcfd/10b550da/4c2f81c7` 等寥寥几种，和内容无关；例：`3dcd4ae6…` 开头 5 条的 md5 为 `00e58570/2c76c3a0/c7de0f7b/02460ff2/3d6d9bd2…` 各不相同）。qqbot WORKLOG 早前已记过同一次虚惊（"前缀只是上传者/批次标识"），这次又踩——**判重只认 md5/fileID 字段，永远别拿 `_id` 前缀当指纹**。
+- **顺带确认**：admin.html 上午的 `in([0,1,3])` 查重改动已随「批量上传→重新载入」重构整块移除（admin 端不再上传，无影响）；线上 md5 查重实际只剩 autoUpload/addImage 两个云函数——**用户已于当日重新部署完成**，status=3 查重口径全量生效。
+- **沉淀**：新增 `tools/db_dedup_check.js`——全库 md5/fileID 判重审计，默认只读，`--delete` 才按"bot已发 > status3 > status1 > status0、同级取早"保留一条并走 deleteImages 云函数硬删（删前写 dedup_backup.json）。依赖 `npm i @cloudbase/js-sdk`，本次实测通过（node 24 直跑，注意脚本需 process.exit，js-sdk 有后台定时器不退出）。
+
 ## 2026-09-02 修复 admin 全列表「加载失败」：CDN latest SDK 3.9.0 破坏性更新，锁版 2.32.0
 
 - **现象**：admin 所有图片列表 tab（待审核/已通过/转发群组/已拒绝）全显示「加载失败」，但顶部统计数字正常。用户怀疑是当天「批量上传→重新载入」改动删代码导致。
@@ -28,7 +36,7 @@
 - **改动**：`cloudfunctions/autoUpload/index.js`、`cloudfunctions/addImage/index.js` 查重改为 `in([0,1,2,3])`；`admin/admin.html` 批量上传查重改为 `in([0,1,3])`——status=2（拒绝）在 admin 端**有意**保持不拦（被拒的图允许手动重传），收集端云函数仍拦 2（自动管线不收死图）。
 - **未动**：`cosUploadHandler`（COS 事件兜底通道，事件里拿不到 md5，只能按 fileID 去重）。
 - **验证**：三个文件语法检查通过（node --check / 内联 script 提取检查）。
-- **待办（人工）**：autoUpload、addImage 两个云函数需在微信开发者工具右键「上传并部署：云端安装依赖」重新部署后才在云端生效；admin.html 由本地工具直出（no-store），强刷即生效。已入库的历史重复不追溯，仅拦新增。
+- **待办（人工）→ 已完成（当日）**：autoUpload、addImage 两个云函数已在微信开发者工具重新部署，云端生效；admin.html 由本地工具直出（no-store），强刷即生效。已入库的历史重复不追溯，仅拦新增——后经全库审计确认历史本就无重复（见顶部条目）。
 
 ## 2026-08-30 云开发到期迁移预案（mouyu env → july env）
 
