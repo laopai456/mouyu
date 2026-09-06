@@ -6,17 +6,22 @@ const db = cloud.database();
 const _ = db.command;
 
 const IMAGE_WINDOW_DAYS = 7;
-const BATCH_SIZE = 100;
+// 云函数端单次 get 上限 1000；超出由分页循环兜底
+const BATCH_SIZE = 1000;
+// 客户端只消费 _id（seenIds/点赞）和 url/tempUrl（显示），
+// 只拉轻字段既快一个数量级，也避免把 md5/来源等整文档字段发给前端
+const LIGHT_FIELDS = { _id: true, url: true };
 
-async function fetchAllApproved() {
+async function fetchPool(where) {
   let all = [];
   let skip = 0;
   while (true) {
     const res = await db.collection('images')
-      .where({ status: 1 })
+      .where(where)
       .orderBy('createTime', 'desc')
       .skip(skip)
       .limit(BATCH_SIZE)
+      .field(LIGHT_FIELDS)
       .get();
     all = all.concat(res.data);
     if (res.data.length < BATCH_SIZE) break;
@@ -42,24 +47,29 @@ exports.main = async (event, context) => {
     let allImages = [];
 
     if (isDebugMode) {
-      const result = await db.collection('images').where({ status: 0 }).limit(BATCH_SIZE).get();
+      const result = await db.collection('images')
+        .where({ status: 0 })
+        .limit(BATCH_SIZE)
+        .field(LIGHT_FIELDS)
+        .get();
       allImages = result.data;
       console.log('DEBUG: debug mode, fetched', allImages.length, 'pending images');
+    } else if (isFirstVisit) {
+      // 首访：不做窗口过滤，整个过审池都可发
+      allImages = await fetchPool({ status: 1 });
+      console.log('DEBUG: first visit, full pool', allImages.length, 'approved images');
     } else {
-      allImages = await fetchAllApproved();
-      console.log('DEBUG: fetched total', allImages.length, 'approved images');
-
-      if (!isFirstVisit) {
-        const now = Date.now();
-        const windowMs = IMAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-        const windowStart = now - windowMs;
-
-        const windowImages = allImages.filter(img => img.reviewTime && img.reviewTime >= windowStart);
-        console.log('DEBUG: window filter', windowImages.length, 'images in last', IMAGE_WINDOW_DAYS, 'days');
-
-        if (windowImages.length > 0) {
-          allImages = windowImages;
-        }
+      // 7 天窗口直接下推到 DB 查询（窗口内通常远小于全表）；
+      // 窗口为空则回退到整个过审池（与旧版 JS 过滤语义一致，
+      // 含 10 条缺 reviewTime 的老图：窗口查询天然排除、全量池天然包含）
+      const windowStart = Date.now() - IMAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+      const windowImages = await fetchPool({ status: 1, reviewTime: _.gte(windowStart) });
+      console.log('DEBUG: window query got', windowImages.length, 'images in last', IMAGE_WINDOW_DAYS, 'days');
+      if (windowImages.length > 0) {
+        allImages = windowImages;
+      } else {
+        allImages = await fetchPool({ status: 1 });
+        console.log('DEBUG: window empty, fallback to full pool', allImages.length, 'approved images');
       }
     }
 
