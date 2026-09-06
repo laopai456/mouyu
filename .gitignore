@@ -32,8 +32,8 @@ tools/migration/node_modules/
 admin/config.local.js
 env.local.js
 tools/config.local.json
-# TG 会话与运行时缓存（严禁入库）
-tools/tdl_downloader/tdl-export.json
+# TG 会话与运行时缓存（严禁入库；不带路径前缀，根目录同名文件一并覆盖）
+tdl-export.json
 __pycache__/
 # 小程序个人配置（含真实 AppID，DevTools 优先读这里）
 project.private.config.json
