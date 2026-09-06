@@ -38,8 +38,8 @@ QQBOT_DIR = Path(r"C:\Users\w\Documents\GitHub\qqbot")
 QQBOT_LOG_DIR = QQBOT_DIR / "logs"
 QQBOT_BOT_LOG = QQBOT_LOG_DIR / "bot.log"
 QQBOT_STOP_FLAG = QQBOT_LOG_DIR / "STOPPED"
-QQBOT_STOPALL_BAT = QQBOT_DIR / "一键停止.bat"
 QQBOT_SILENT_VBS = QQBOT_DIR / "silent_start_bot.vbs"
+QQBOT_STATUS_BAT = QQBOT_DIR / "机器人状态.bat"
 BOT_LOG_INIT_BYTES = 8000   # 打开窗口时回看 bot.log 的字节数
 BOT_LOG_MAX_LINES = 3000    # 机器人日志面板保留的行数上限
 BOT_PORT = 8080             # NoneBot 监听端口（bot 存活判定，与看门狗一致）
@@ -170,8 +170,8 @@ class App:
         self.bot_stop_btn = ttk.Button(btn_row3, text="⏹ 停止机器人", command=self.bot_stop, width=14)
         self.bot_stop_btn.pack(side=tk.LEFT, padx=(0, 10))
 
-        self.bot_clean_btn = ttk.Button(btn_row3, text="🧹 清理所有进程", command=self.bot_clean, width=14)
-        self.bot_clean_btn.pack(side=tk.LEFT)
+        self.bot_panel_btn = ttk.Button(btn_row3, text="📊 打开面板", command=self.bot_panel, width=14)
+        self.bot_panel_btn.pack(side=tk.LEFT)
 
         # ─ 日志区（左右分屏：工具日志 | 机器人日志） ─
         log_frame = ttk.Frame(self.root, padding=(12, 0, 12, 12))
@@ -322,15 +322,15 @@ class App:
     def bot_stop(self):
         self._bot_action(self._do_bot_stop)
 
-    def bot_clean(self):
-        self._bot_action(self._do_bot_clean)
+    def bot_panel(self):
+        self._bot_action(self._do_bot_panel)
 
     def _bot_action(self, fn):
         """机器人按钮公共壳：后台线程执行，期间三个按钮禁用。"""
         if self._bot_busy:
             return
         self._bot_busy = True
-        for btn in (self.bot_start_btn, self.bot_stop_btn, self.bot_clean_btn):
+        for btn in (self.bot_start_btn, self.bot_stop_btn, self.bot_panel_btn):
             btn.config(state=tk.DISABLED)
 
         def worker():
@@ -345,7 +345,7 @@ class App:
 
     def _bot_buttons_idle(self):
         self._bot_busy = False
-        for btn in (self.bot_start_btn, self.bot_stop_btn, self.bot_clean_btn):
+        for btn in (self.bot_start_btn, self.bot_stop_btn, self.bot_panel_btn):
             btn.config(state=tk.NORMAL)
 
     def _do_bot_start(self):
@@ -374,15 +374,19 @@ class App:
         killed = self._kill_bot_pythons()
         self.bot_log_write(f"已结束 {killed} 个机器人进程；NapCat/QQ 未动。\n")
 
-    def _do_bot_clean(self):
-        """全清：跑 qqbot 的一键停止.bat（bot + NapCat/QQ + 看门狗暂停），再兜底清残留 bot.py。"""
-        self.bot_log_write("\n" + "─" * 46 + "\n🧹 清理机器人所有相关进程……\n")
-        if QQBOT_STOPALL_BAT.exists():
-            self._run_bat_streamed(QQBOT_STOPALL_BAT, ["/auto"])
-        else:
-            self.bot_log_write(f"WARN 未找到 {QQBOT_STOPALL_BAT}，仅做进程兜底清理\n")
-        killed = self._kill_bot_pythons()
-        self.bot_log_write(f"兜底清理：结束 {killed} 个 bot.py 进程。恢复点「启动机器人」。\n")
+    def _do_bot_panel(self):
+        """打开 qqbot 状态面板（独立控制台窗口，纯展示；关窗只收起展示，不影响机器人进程）。"""
+        self.bot_log_write("\n" + "─" * 46 + "\n📊 打开机器人状态面板……\n")
+        if not QQBOT_STATUS_BAT.exists():
+            self.bot_log_write(f"WARN 未找到 {QQBOT_STATUS_BAT}\n")
+            return
+        # CREATE_NEW_CONSOLE：给 bat 开一个真正可见的新控制台
+        # （hidden 父进程里用 start 弹窗不可见，必须直接给子进程新控制台）
+        subprocess.Popen(
+            ["cmd", "/c", str(QQBOT_STATUS_BAT)],
+            cwd=str(QQBOT_DIR), creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
+        self.bot_log_write("已在独立窗口打开（每 5 秒刷新）。关窗只是收起展示，机器人照常运行。\n")
 
     # ── 进程探测/清理工具 ──
 
@@ -395,22 +399,6 @@ class App:
                 self.bot_log_write(f"WARN 命令返回码 {r.returncode}: {' '.join(cmd)}\n{err}\n")
         except Exception as e:
             self.bot_log_write(f"WARN 命令执行失败 {' '.join(cmd)}: {e}\n")
-
-    def _run_bat_streamed(self, bat: Path, args: list[str] | None = None):
-        """跑 qqbot 的 bat 并把输出（bat 输出为 GBK）流式写进机器人日志面板。"""
-        _NO_WIN = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-        try:
-            p = subprocess.Popen(
-                ["cmd", "/c", str(bat), *(args or [])],
-                cwd=str(QQBOT_DIR), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                creationflags=_NO_WIN,
-            )
-            if p.stdout:
-                for raw in p.stdout:
-                    self.bot_log_write(raw.decode("gbk", "replace"))
-            p.wait()
-        except Exception as e:
-            self.bot_log_write(f"WARN 脚本执行失败 {bat.name}: {e}\n")
 
     def _port_listening(self, port: int = BOT_PORT) -> bool:
         """端口是否有人监听（与看门狗的 bot 存活判定一致）。"""
