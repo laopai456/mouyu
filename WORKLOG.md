@@ -2,6 +2,13 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-06 git 脱敏收尾：Gmail 邮箱历史重写 + 根目录 tdl-export.json 出库
+
+- **背景**：全库脱敏审计——六组真实值（AppID/envId/两个 openid）pickaxe+逐树扫全历史零残留；但 a11c81f 之后 5 个提交作者邮箱是真实 Gmail（本机 git config 未改回，脱敏后新提交继续泄漏），根目录 tdl-export.json 因 .gitignore 规则带路径前缀漏网仍被跟踪（内容为 TG 消息元数据，无凭据，敏感度低）。
+- **改动**：① 本机 `git config user.email` 改回 GitHub noreply（堵源头）；② 顺带 commit 遗留的 getRandomImage 轻量化改动（9-02 已验证）；③ .gitignore 规则去路径前缀 + `git rm --cached tdl-export.json`；④ `python -m git_filter_repo --email-callback` 重写 Gmail→noreply（先删 .git/filter-repo 旧 already_ran 标记避免交互卡死；提交信息里的旧 hash 引用自动同步，如 a11c81f→35f5bf8）；⑤ force push（8cd3ba6→75fff14）。
+- **验证**：`git log --all --format='%ae|%ce'` 仅剩 noreply 一种；提交数 122 不变；`git ls-files` 无 tdl-export；工作区干净；GitHub 已强推成功。
+- **注意**：GitHub 服务端旧 hash 对象或可短暂直链访问（邮箱敏感度低，不处理）；tdl-export 历史版本按用户确认不清理。
+
 ## 2026-09-06 工具「清理所有进程」→「打开面板」；qqbot 开机面板去误杀
 
 - **需求**：工具内机器人日志面板与开机状态面板内容重复，且开机面板藏陷阱——`机器人控制台.vbs` 设计为关窗即跑一键停止.bat（bot+NapCat/QQ 全杀）。用户拍板：面板改纯展示（关窗不杀），工具里用不到的「清理所有进程」按钮换成「打开面板」。
