@@ -16,10 +16,11 @@
 - 自动上传：`pip install -r tools/uploader/requirements.txt && python tools/uploader/uploader.py`
 
 ## 关键约定（改云函数/数据时必看）
-- **图片状态机**：status ∈ {0:待审核, 1:已通过, 2:已拒绝}。getRandomImage 只返 status=1，时间窗口按 `reviewTime` 判断（首次访问可看全部，后续只看 7 天内 reviewTime）。
+- **图片状态机**：status ∈ {0:待审核, 1:已通过, 2:已拒绝, 3:转发群组}。getRandomImage 只返 status=1，时间窗口按 `reviewTime` 判断（首次访问可看全部，后续只看 7 天内 reviewTime）。
 - **哈哈权重**：`laughCount` 越高展示概率越大（权重 = laughCount + 1，上限 15 次有效）。
 - **云数据库 where() 链式 bug**：多条件 where 可能丢条件 → 改用内存过滤（先 where status，再 filter reviewTime）。
 - **autoCleanup**：满 2000 张删 200 张，优先删 status=2，不够再删 status=0，按 createTime 倒序。
+- **monthlyCleanup**：每月3号凌晨3点删「上上个月」及更早（`yearMonth <= 当前月-2` 累积式，保留当前月+上个月），**豁免 status=3 转发群组**（qqbot 滴灌池）；手动调用需 ADMIN_OPENIDS 白名单，`dryRun` 只统计不删。
 - **代码包排除**：`tools/ docs/ admin/ .trae/ *.py *.md .venv/` 不进小程序包（~300KB）。
 
 ## 字段（images 表关键字段）

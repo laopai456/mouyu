@@ -136,6 +136,7 @@ mouyu/
 | uploadFile | 云存储文件上传（绕过免费版权限限制） |
 | deleteImages | 批量删除图片 |
 | autoCleanup | 自动清理（满2000张删200张，优先删已拒绝） |
+| monthlyCleanup | 定时按月清理（每月3号凌晨3点删上上个月及更早，豁免转发群组） |
 | autoUpload | 自动上传工具支持 |
 
 ---
@@ -146,6 +147,8 @@ mouyu/
 - 删除数量：每次删除 200 张
 - 删除优先级：先删已拒绝(status=2)，不够再删待审核(status=0)
 - 排序方式：按 createTime 倒序
+
+**按月清理（monthlyCleanup）**：每月3号凌晨3点，删除「上上个月」及更早的图片（按 yearMonth 累积式，保留当前月+上个月；豁免转发群组 status=3；云存储文件一并删除）。手动测试可在 DevTools 控制台传 `{"dryRun": true}` 只统计不删，正式手动执行需带 `{"adminOpenid": "<白名单openid>"}`。
 
 ---
 
@@ -180,11 +183,11 @@ python uploader.py
 
 ## 部署步骤
 
-1. **部署云函数**：admin, getTempUrls, uploadFile, deleteImages, autoCleanup, autoUpload, getRandomImage, addImage, dislikeImage, likeImage, laughImage
+1. **部署云函数**：admin, getTempUrls, uploadFile, deleteImages, autoCleanup, autoUpload, getRandomImage, addImage, dislikeImage, likeImage, laughImage, monthlyCleanup
 
 2. **配置云函数权限**：未登录用户可调用
 
-3. **配置定时触发器**：autoCleanup 设置每天凌晨2点执行
+3. **配置定时触发器**：autoCleanup 每天凌晨2点、monthlyCleanup 每月3号凌晨3点（触发器已写在各自 package.json 的 `triggers`，DevTools 中右键对应云函数 →「上传触发器」即可创建）
 
 4. **启动本地服务器**访问 Web 管理工具
 

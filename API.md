@@ -18,6 +18,7 @@
 | getTempUrls | 获取临时URL |
 | autoCleanup | 自动清理 |
 | autoUpload | 自动上传 |
+| monthlyCleanup | 按月定时清理 |
 
 ---
 
@@ -306,6 +307,39 @@ wx.cloud.callFunction({
   fileList?: object[]
 }
 ```
+
+---
+
+## 11. monthlyCleanup
+
+按月定时清理（每月3号凌晨3点定时触发；手动调用需 ADMIN_OPENIDS 白名单）
+
+删除「上上个月」及更早的图片（按 `yearMonth <= cutoff` 累积式，始终保留当前月+上个月；豁免转发群组 status=3；云存储文件批量删除后删库记录）。50 秒软超时保护，超时剩余部分留给下次触发。
+
+**请求参数**（定时触发为 Timer 事件；手动调用时）：
+```javascript
+{
+  dryRun?: boolean,       // true=只统计候选数不删除
+  adminOpenid?: string    // 手动调用时的白名单 openid（DevTools 控制台测试用）
+}
+```
+
+**返回参数**：
+```javascript
+{
+  success: boolean,
+  cutoffYearMonth: string,   // 'YYYY-MM'，删该月及更早
+  scanned?: number,
+  deletedCount?: number,
+  failedCount?: number,
+  storageFailed?: number,
+  skippedForward?: number,   // 豁免的 status=3 数量
+  timedOut?: boolean,
+  elapsedMs?: number
+}
+```
+
+**触发条件**：每月3号凌晨3点自动执行（package.json triggers）
 
 ---
 

@@ -1,0 +1,20 @@
+{
+  "name": "monthlyCleanup",
+  "version": "1.0.0",
+  "description": "每月3号凌晨3点清理上上个月及更早的图片（豁免转发群组 status=3）",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  },
+  "cloudfunction-config": {
+    "memorySize": 256,
+    "timeout": 60
+  },
+  "triggers": [
+    {
+      "name": "monthlyCleanupTrigger",
+      "type": "timer",
+      "config": "0 0 3 3 * * *"
+    }
+  ]
+}
