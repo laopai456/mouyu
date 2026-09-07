@@ -9,7 +9,8 @@
   - **触发**：package.json `triggers` 定时器 `0 0 3 3 * * *`（每月3号北京时间凌晨3点），与 autoCleanup 每天2点错开。
   - **口径**：`yearMonth <= 当前月-2`（北京时间计算，**累积式**——漏跑下月自动补上，终态恒为保留当前月+上个月）；豁免 **status=3 转发群组**（qqbot `mouyu_forward.py` 的滴灌池，8-27 autoCleanup 同款豁免，查过转发插件确认 status=3 是长期复用素材不是一次性队列）。
   - **实现**：单条件 where 下推（避开多条件 where 丢条件的坑）+ status 内存过滤；存储文件 `deleteFile` 整批 100 个删（autoCleanup 是逐个删，这次批量更快）；50s 软超时保护（云函数上限 60s），超时剩余留给下次；整批全是删失败残留时停止防打转。日志带 `[MONTHLY_CLEAN]` 关键词。
-  - **权限**：Timer 触发放行；手动/客户端调用需 `ADMIN_OPENIDS` 白名单（缺省空名单=拒绝，fail-safe 同 deleteImages）。DevTools 控制台测试：`{"dryRun": true}` 只统计；正式手动跑需 `{"adminOpenid": "<白名单openid>"}`（控制台调用 OPENID 为空）。
+  - **权限**：Timer 触发与 dryRun（只统计不删）放行；真删需 `ADMIN_OPENIDS` 白名单（缺省空名单=拒绝，fail-safe 同 deleteImages）。DevTools 控制台真删：`{"adminOpenid": "<白名单openid>"}`（控制台调用 OPENID 为空），且云端须先给 monthlyCleanup 配好 ADMIN_OPENIDS 环境变量（新函数默认无任何环境变量）。
+- **修正（同日 8027cf7）**：初版白名单检查排在 dryRun 前面，导致部署后直接跑 `{"dryRun": true}` 返回「无权限操作」，与操作指引自相矛盾——已改为 dryRun 免白名单（只读统计无风险），真删仍需白名单。
 - **文档**：README 云函数表+清理规则+部署步骤、API.md 第11节、CLAUDE.md 关键约定（顺手把状态机补上 status=3）。
 - **验证**：node --check 过；cutoff 计算单测 6 边界全过（9月→07、10月→08、跨年1月→前年11月、3月→01、CST/UTC 日期临界）。**线上未部署未验证真实库**。
 - **待办（人工）**：① DevTools 右键 `cloudfunctions/monthlyCleanup` → 上传并部署（云端安装依赖）；② 右键 → 上传触发器；③ 控制台先跑 `{"dryRun": true}` 看候选数，确认后再正式触发。存量「上上个月」前的图较多时首次真跑可能 50s 软超时，timedOut=true 就再手动跑一次即可。
