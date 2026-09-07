@@ -312,7 +312,7 @@ wx.cloud.callFunction({
 
 ## 11. monthlyCleanup
 
-按月定时清理（每月3号凌晨3点定时触发；手动调用需 ADMIN_OPENIDS 白名单）
+按月定时清理（每月3号凌晨3点定时触发；真删需 ADMIN_OPENIDS 白名单，dryRun 免）
 
 删除「上上个月」及更早的图片（按 `yearMonth <= cutoff` 累积式，始终保留当前月+上个月；豁免转发群组 status=3；云存储文件批量删除后删库记录）。50 秒软超时保护，超时剩余部分留给下次触发。
 

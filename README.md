@@ -148,7 +148,7 @@ mouyu/
 - 删除优先级：先删已拒绝(status=2)，不够再删待审核(status=0)
 - 排序方式：按 createTime 倒序
 
-**按月清理（monthlyCleanup）**：每月3号凌晨3点，删除「上上个月」及更早的图片（按 yearMonth 累积式，保留当前月+上个月；豁免转发群组 status=3；云存储文件一并删除）。手动测试可在 DevTools 控制台传 `{"dryRun": true}` 只统计不删，正式手动执行需带 `{"adminOpenid": "<白名单openid>"}`。
+**按月清理（monthlyCleanup）**：每月3号凌晨3点，删除「上上个月」及更早的图片（按 yearMonth 累积式，保留当前月+上个月；豁免转发群组 status=3；云存储文件一并删除）。测试：DevTools 控制台传 `{"dryRun": true}` 只统计不删（免白名单，部署后即可跑）。正式手动执行需两步：云开发控制台给 monthlyCleanup 配环境变量 `ADMIN_OPENIDS`（逗号分隔 openid），测试事件带 `{"adminOpenid": "<白名单openid>"}`。
 
 ---
 
@@ -353,7 +353,7 @@ const filtered = result.data.filter(img => img.reviewTime >= time);
 | `admin/config.local.js` | 审核后台的环境 ID 与管理员 openid | 复制 `admin/config.local.example.js` 填入 |
 | `tools/config.local.json` | 判重审计脚本 `tools/db_dedup_check.js` 的配置 | 复制 `tools/config.local.example.json` 填入 |
 | `project.private.config.json` | 小程序真实 AppID（DevTools 优先读取，覆盖 project.config.json 的 touristappid） | 本地新建，写入 `"appid": "你的AppID"`，文件已被 gitignore |
-| 云函数环境变量 `ADMIN_OPENIDS` | admin / addImage / deleteImages 的白名单（逗号分隔 openid；admin 另有 `CREATOR_OPENIDS`，缺省同 ADMIN） | 云开发控制台→云函数→配置→环境变量 |
+| 云函数环境变量 `ADMIN_OPENIDS` | admin / addImage / deleteImages / monthlyCleanup 的白名单（逗号分隔 openid；admin 另有 `CREATOR_OPENIDS`，缺省同 ADMIN） | 云开发控制台→云函数→配置→环境变量 |
 | 云函数环境变量 `ENV_ID` | cosUploadHandler 拼 fileID 用的环境 ID（缺失时安全跳过不写库） | 同上 |
 | 环境变量 `MOYU_ADMIN_URL` | tools/gui.py 的托管后台回退地址（打包 exe 不受影响） | 本地运行 gui.py 时设置 |
 

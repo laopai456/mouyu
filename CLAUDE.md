@@ -20,7 +20,7 @@
 - **哈哈权重**：`laughCount` 越高展示概率越大（权重 = laughCount + 1，上限 15 次有效）。
 - **云数据库 where() 链式 bug**：多条件 where 可能丢条件 → 改用内存过滤（先 where status，再 filter reviewTime）。
 - **autoCleanup**：满 2000 张删 200 张，优先删 status=2，不够再删 status=0，按 createTime 倒序。
-- **monthlyCleanup**：每月3号凌晨3点删「上上个月」及更早（`yearMonth <= 当前月-2` 累积式，保留当前月+上个月），**豁免 status=3 转发群组**（qqbot 滴灌池）；手动调用需 ADMIN_OPENIDS 白名单，`dryRun` 只统计不删。
+- **monthlyCleanup**：每月3号凌晨3点删「上上个月」及更早（`yearMonth <= 当前月-2` 累积式，保留当前月+上个月），**豁免 status=3 转发群组**（qqbot 滴灌池）；真删需 ADMIN_OPENIDS 白名单（缺省空=拒绝，fail-safe），`dryRun` 只统计不删、免白名单。
 - **代码包排除**：`tools/ docs/ admin/ .trae/ *.py *.md .venv/` 不进小程序包（~300KB）。
 
 ## 字段（images 表关键字段）

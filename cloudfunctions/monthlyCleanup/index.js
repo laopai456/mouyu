@@ -11,8 +11,9 @@ const KEEP_MONTHS = 2;
 // 云函数上限 60s，提前收尾返回，剩余部分留给下次触发/手动再跑
 const SOFT_DEADLINE_MS = 50 * 1000;
 
-// 白名单读环境变量 ADMIN_OPENIDS（逗号分隔；缺省空名单=拒绝手动调用，fail-safe）。
-// 定时触发不走白名单；DevTools 控制台手动测试时 OPENID 为空，需在测试事件里带 adminOpenid。
+// 白名单读环境变量 ADMIN_OPENIDS（逗号分隔；缺省空名单=拒绝，fail-safe）。
+// 只约束「真删」：定时触发与 dryRun（只统计不删）不走白名单，部署后即可直接测试；
+// DevTools 控制台手动真删时 OPENID 为空，需在测试事件里带 adminOpenid，且云端已配 ADMIN_OPENIDS。
 const ADMIN_OPENIDS = (process.env.ADMIN_OPENIDS || '').split(',').map(s => s.trim()).filter(Boolean);
 
 // 以北京时间（UTC+8）算 KEEP_MONTHS 个月前的月份，返回 'YYYY-MM'
@@ -26,7 +27,8 @@ exports.main = async (event = {}) => {
   const started = Date.now();
 
   const isTimer = event.Type === 'Timer' || event.TriggerName === 'monthlyCleanupTrigger';
-  if (!isTimer) {
+  // dryRun 只读统计不删数据，免白名单，方便部署后直接验证
+  if (!isTimer && !event.dryRun) {
     const { OPENID } = cloud.getWXContext();
     const requestOpenid = event.adminOpenid || OPENID;
     if (!ADMIN_OPENIDS.includes(requestOpenid)) {
