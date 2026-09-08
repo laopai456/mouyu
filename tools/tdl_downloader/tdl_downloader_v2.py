@@ -16,6 +16,9 @@ sys.stdout.reconfigure(line_buffering=True)
 
 TDL_PATH = r"C:\tdl\tdl.exe"
 PROXY = "socks5://127.0.0.1:17891"
+# tdl 内部静默重连退避上限（默认 5m）：握手失败时它会悄悄重试，实测贡献了
+# 20~30s 的神秘耗时。收紧到 60s 让失败更快浮出，由脚本外层统一重试
+RECONNECT_TIMEOUT = "60s"
 
 CHANNELS = {
     "woshadiao": 200,
@@ -356,11 +359,11 @@ def export_channel(channel: str, limit: int, output_file: str, progress_cache: d
     if last_id:
         start_id = last_id + 1
         cmd = [TDL_PATH, "chat", "export", "-c", channel, "-o", output_file,
-               "-T", "id", "-i", str(start_id), "--proxy", PROXY, "--with-content"]
+               "-T", "id", "-i", str(start_id), "--with-content"] + _tdl_base_args()
         desc = f"导出频道: {channel} (增量模式，从消息ID {start_id} 开始)"
     else:
         cmd = [TDL_PATH, "chat", "export", "-c", channel, "-o", output_file,
-               "-T", "last", "-i", str(limit), "--proxy", PROXY, "--with-content"]
+               "-T", "last", "-i", str(limit), "--with-content"] + _tdl_base_args()
         desc = f"导出频道: {channel} (全量模式，最近 {limit} 条)"
 
     # export 期间 stdout 几乎无输出，靠 stuck check 会误报；只看总超时
@@ -570,7 +573,7 @@ def filter_and_download(
     # 把对应文件从列表剔除后重试，避免因单个坏文件卡死整个频道
     for bad_round in range(MAX_BAD_FILE_ROUNDS):
         cmd = [TDL_PATH, "dl", "-f", filtered_file, "-d", download_dir,
-               "--proxy", PROXY, "--skip-same", "-t", str(DOWNLOAD_THREADS)]
+               "--skip-same", "-t", str(DOWNLOAD_THREADS)] + _tdl_base_args()
         # 下载只重试 1 次：同列表重试坏文件无意义，靠外层剔除坏文件
         ok, stuck = run_cmd(
             cmd, f"下载 {channel} 的 {len(filtered)} 张图片到 {download_dir}",
@@ -693,6 +696,15 @@ def _socks5_e2e_probe(timeout: float = 8.0) -> bool:
         return False
 
 
+def _tdl_base_args() -> list[str]:
+    """所有 tdl 调用的公共参数：代理 + 内部重连退避上限。
+
+    每个 tdl 进程都要付一次 MTProto 握手税（实测 1.5~30s 波动），公共参数
+    收敛到这里统一管理。
+    """
+    return ["--proxy", PROXY, "--reconnect-timeout", RECONNECT_TIMEOUT]
+
+
 def check_tdl_login() -> bool:
     """检查 tdl 登录状态。
 
@@ -726,7 +738,7 @@ def check_tdl_login() -> bool:
                 print("  ✓ 节点已恢复连通（已顺带预热代理链路）")
             start = time.time()
             result = subprocess.run(
-                [TDL_PATH, "chat", "ls", "--proxy", PROXY],
+                [TDL_PATH, "chat", "ls"] + _tdl_base_args(),
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -822,7 +834,7 @@ def check_channels() -> None:
     _kill_tdl_processes()
     try:
         result = subprocess.run(
-            [TDL_PATH, "chat", "ls", "-o", "json", "--proxy", PROXY],
+            [TDL_PATH, "chat", "ls", "-o", "json"] + _tdl_base_args(),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -919,11 +931,8 @@ def main() -> None:
     print("清理残留 tdl 进程...")
     _kill_tdl_processes()
 
-    if not check_tdl_login():
-        print("\n请先登录 tdl，然后重新运行脚本")
-        print("  登录命令: python tdl_downloader_v2.py --login")
-        return
-
+    # 不做登录预检：预检本身要付一次 MTProto 握手税（实测 1.5~30s 波动）。
+    # 真掉登录/网络不通时首个 export 会失败，由下方频道循环里的懒诊断兜底
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
     # 清理上次中断遗留的残留文件（export/filtered/tdl缓存）
@@ -985,12 +994,21 @@ def main() -> None:
     else:
         print("\n首次运行，无缓存，将开始全新下载。")
 
+    login_diag_ok: Optional[bool] = None  # export 失败时的登录/网络诊断结果缓存
     for channel, limit in CHANNELS.items():
         print(f"\n\n处理频道: {channel} (限制 {limit} 条)")
         export_file = os.path.join(DOWNLOAD_DIR, f"{channel}_export.json")
 
         if export_channel(channel, limit, export_file, progress_cache):
             filter_and_download(export_file, DOWNLOAD_DIR, channel, limit, md5_cache, progress_cache, bad_cache)
+        else:
+            # export 失败：诊断一次区分「掉登录/网络不通」（中止整轮）和偶发失败（继续）
+            if login_diag_ok is None:
+                login_diag_ok = check_tdl_login()
+            if login_diag_ok is False:
+                print("\n请先登录 tdl（或检查代理客户端/节点），然后重新运行脚本")
+                print("  登录命令: python tdl_downloader_v2.py --login")
+                break
 
         if os.path.exists(export_file):
             os.remove(export_file)
