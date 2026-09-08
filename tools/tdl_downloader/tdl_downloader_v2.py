@@ -3,12 +3,14 @@ import json
 import os
 import hashlib
 import re
+import socket
 import sys
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -585,6 +587,22 @@ def filter_and_download(
         os.remove(filtered_file)
 
 
+def probe_proxy_port(timeout: float = 2.0) -> bool:
+    """快速探测本地代理端口是否可连。
+
+    用于区分两类失败：代理客户端没开（端口不可达，重试无意义）
+    vs 节点/到 Telegram 链路慢（端口可达，重试可能恢复）。
+    """
+    parsed = urlparse(PROXY)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 1080
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def check_tdl_login() -> bool:
     """检查 tdl 登录状态。
 
@@ -632,20 +650,28 @@ def check_tdl_login() -> bool:
                     line = line.strip()
                     if line and not any(p in line for p in TDL_IGNORE_PATTERNS):
                         print(f"  {line}")
+            if not probe_proxy_port():
+                print(f"  -> 本地代理端口不可达（{PROXY}），代理客户端可能未运行，不再重试")
+                print(f"  -> 请先启动代理客户端，再重新运行脚本")
+                return False
             if attempt < max_retries:
                 print(f"  等待 5 秒后重试...")
                 time.sleep(5)
             else:
-                print(f"  -> 重试 {max_retries} 次仍失败，代理可能不通或 Telegram 限速严重")
+                print(f"  -> 重试 {max_retries} 次仍失败，代理端口正常但节点可能不通或 Telegram 限速严重")
                 print(f"  -> 这不代表未登录，可稍后重试或直接运行下载观察")
                 return False
         except subprocess.TimeoutExpired:
-            print(f"⚠ 检查登录超时（30 秒）")
+            if not probe_proxy_port():
+                print(f"⚠ 检查登录超时（30 秒），且本地代理端口不可达（{PROXY}）")
+                print(f"  -> 代理客户端可能未运行，请先启动代理客户端，再重新运行脚本")
+                return False
+            print(f"⚠ 检查登录超时（30 秒），代理端口正常，应是节点/到 Telegram 链路慢")
             if attempt < max_retries:
                 print(f"  等待 5 秒后重试...")
                 time.sleep(5)
             else:
-                print(f"  -> 重试 {max_retries} 次均超时，代理可能不通")
+                print(f"  -> 重试 {max_retries} 次均超时，节点可能临时不通，稍后重试")
                 return False
         except Exception as e:
             print(f"✗ 检查登录状态失败: {e}")
