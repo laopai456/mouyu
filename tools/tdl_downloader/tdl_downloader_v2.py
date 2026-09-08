@@ -28,6 +28,9 @@ CHANNELS = {
 DOWNLOAD_DIR = r"C:\Users\w\Downloads\tdl"
 INCLUDE_TYPES = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
 MIN_FILE_SIZE_KB = 20
+# 下载并发线程数：Telegram 单连接吞吐有上限，慢 DC 线路（如 xinjingdaily 媒体所在
+# DC）靠多连接聚合提速；太高易触发临时限速（tdl 会自动退避），8 是小文件场景平衡点
+DOWNLOAD_THREADS = 8
 
 BASE_DIR = Path(__file__).parent
 MD5_CACHE_FILE = BASE_DIR / "cache" / "md5_cache.json"
@@ -510,7 +513,7 @@ def filter_and_download(
             print(f"其中 {len(already_exist)} 张已存在，需下载 {len(pending_filenames) - len(already_exist)} 张")
 
     # --continue 容易因残留 .tdl 缓存导致卡住，去掉
-    # -t 2 并发下载（不要设太大，避免触发 Telegram 限速）
+    # 并发用 DOWNLOAD_THREADS（原 2 太保守：单连接吞吐被封顶，慢 DC 频道下载极慢）
     need_download_count = len(pending_filenames) - len(already_exist)
 
     dl_ok = False
@@ -518,7 +521,7 @@ def filter_and_download(
     # 把对应文件从列表剔除后重试，避免因单个坏文件卡死整个频道
     for bad_round in range(MAX_BAD_FILE_ROUNDS):
         cmd = [TDL_PATH, "dl", "-f", filtered_file, "-d", download_dir,
-               "--proxy", PROXY, "--skip-same", "-t", "2"]
+               "--proxy", PROXY, "--skip-same", "-t", str(DOWNLOAD_THREADS)]
         # 下载只重试 1 次：同列表重试坏文件无意义，靠外层剔除坏文件
         ok, stuck = run_cmd(
             cmd, f"下载 {channel} 的 {len(filtered)} 张图片到 {download_dir}",
