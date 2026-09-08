@@ -668,19 +668,62 @@ def probe_proxy_port(timeout: float = 2.0) -> bool:
         return False
 
 
+def _socks5_e2e_probe(timeout: float = 8.0) -> bool:
+    """端到端探测：经 SOCKS5 代理对 Telegram DC 边缘建 TCP（stdlib 裸握手）。
+
+    成功说明「本地端口→节点→Telegram」整条链路通（顺带预热代理客户端的
+    节点连接，tdl 随后的 MTProto 握手更快）；失败说明节点或其到 TG 的线路
+    不通，此时跑 tdl 只会干等到超时。tg_ip 用 Telegram DC2 边缘 IP 免本地 DNS。
+    """
+    parsed = urlparse(PROXY)
+    proxy_host = parsed.hostname or "127.0.0.1"
+    proxy_port = parsed.port or 1080
+    tg_ip, tg_port = "149.154.167.51", 443
+    try:
+        with socket.create_connection((proxy_host, proxy_port), timeout=timeout) as s:
+            s.settimeout(timeout)
+            s.sendall(b"\x05\x01\x00")  # SOCKS5 握手：无认证
+            if s.recv(2) != b"\x05\x00":
+                return False
+            # CONNECT tg_ip:443（ATYP=1 IPv4）
+            s.sendall(b"\x05\x01\x00\x01" + socket.inet_aton(tg_ip) + tg_port.to_bytes(2, "big"))
+            resp = s.recv(32)
+            return len(resp) >= 4 and resp[1] == 0
+    except OSError:
+        return False
+
+
 def check_tdl_login() -> bool:
     """检查 tdl 登录状态。
 
     用 chat ls（只列对话列表，不拉内容）替代 chat export --with-content，
-    避免内容下载限速被误判为未登录。区分三类结果：
+    避免内容下载限速被误判为未登录。区分结果：
     - 明确未登录（输出含 not authorized / please login）：直接返回 False
-    - 限速/网络抖动：重试，不轻易判未登录
-    - 成功：返回 True
+    - 代理客户端没开（端口不可达）：提示启动，不重试
+    - 节点到 Telegram 不通（端到端探测失败）：跳过 tdl 干等，等恢复再查
+    - 链路通但 tdl 冷启动握手慢：递增超时重试（探测顺带预热代理链路）
     """
     max_retries = 3
+    timeouts = [30, 60, 90]  # 递增：实测 chat ls 冷启动可达 ~27s（裸隧道瞬时通也一样），30s 保底一刀过
+    last_e2e_ok: Optional[bool] = None
     for attempt in range(1, max_retries + 1):
+        if attempt > 1:
+            print("  等待 5 秒后重试...")
+            time.sleep(5)
+        timeout = timeouts[attempt - 1]
+        print(f"  正在检查 tdl 登录状态（{attempt}/{max_retries}，超时 {timeout} 秒）...")
         try:
-            print(f"  正在检查 tdl 登录状态（{attempt}/{max_retries}，超时 30 秒）...")
+            if not probe_proxy_port():
+                print(f"  -> 本地代理端口不可达（{PROXY}），代理客户端可能未运行")
+                print(f"  -> 请先启动代理客户端，再重新运行脚本")
+                return False
+            if last_e2e_ok is False:
+                # 上一轮已确认节点不通：先探测，恢复了才值得跑 tdl（否则只是干等超时）
+                last_e2e_ok = _socks5_e2e_probe()
+                if not last_e2e_ok:
+                    print("  ⚠ 节点到 Telegram 仍不通，跳过本轮 tdl 检查")
+                    continue
+                print("  ✓ 节点已恢复连通（已顺带预热代理链路）")
             start = time.time()
             result = subprocess.run(
                 [TDL_PATH, "chat", "ls", "--proxy", PROXY],
@@ -688,7 +731,7 @@ def check_tdl_login() -> bool:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=30,
+                timeout=timeout,
             )
             elapsed = time.time() - start
             if result.returncode == 0:
@@ -715,32 +758,26 @@ def check_tdl_login() -> bool:
                     line = line.strip()
                     if line and not any(p in line for p in TDL_IGNORE_PATTERNS):
                         print(f"  {line}")
+        except subprocess.TimeoutExpired:
+            print(f"⚠ 检查登录超时（{timeout} 秒）")
             if not probe_proxy_port():
-                print(f"  -> 本地代理端口不可达（{PROXY}），代理客户端可能未运行，不再重试")
+                print(f"  -> 本地代理端口不可达（{PROXY}），代理客户端可能未运行")
                 print(f"  -> 请先启动代理客户端，再重新运行脚本")
                 return False
-            if attempt < max_retries:
-                print(f"  等待 5 秒后重试...")
-                time.sleep(5)
+            last_e2e_ok = _socks5_e2e_probe()
+            if last_e2e_ok:
+                print("  -> 代理链路端到端连通（已顺带预热），应是 tdl 冷启动握手慢，下一轮加长超时")
             else:
-                print(f"  -> 重试 {max_retries} 次仍失败，代理端口正常但节点可能不通或 Telegram 限速严重")
-                print(f"  -> 这不代表未登录，可稍后重试或直接运行下载观察")
-                return False
-        except subprocess.TimeoutExpired:
-            if not probe_proxy_port():
-                print(f"⚠ 检查登录超时（30 秒），且本地代理端口不可达（{PROXY}）")
-                print(f"  -> 代理客户端可能未运行，请先启动代理客户端，再重新运行脚本")
-                return False
-            print(f"⚠ 检查登录超时（30 秒），代理端口正常，应是节点/到 Telegram 链路慢")
-            if attempt < max_retries:
-                print(f"  等待 5 秒后重试...")
-                time.sleep(5)
-            else:
-                print(f"  -> 重试 {max_retries} 次均超时，节点可能临时不通，稍后重试")
-                return False
+                print("  -> 节点到 Telegram 不通，下一轮先等恢复再检查")
         except Exception as e:
             print(f"✗ 检查登录状态失败: {e}")
             return False
+
+    if last_e2e_ok is False:
+        print(f"  -> 重试 {max_retries} 次节点均到不了 Telegram，临时故障，稍后重试或更换节点")
+    else:
+        print(f"  -> 重试 {max_retries} 次仍失败，可稍后重试或直接运行下载观察")
+    print(f"  -> 这不代表未登录（登录态存在本地）")
     return False
 
 
