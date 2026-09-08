@@ -36,6 +36,7 @@ BASE_DIR = Path(__file__).parent
 MD5_CACHE_FILE = BASE_DIR / "cache" / "md5_cache.json"
 PROGRESS_CACHE_FILE = BASE_DIR / "cache" / "progress_cache.json"
 DISCOVER_CACHE_FILE = BASE_DIR / "cache" / "discover_cache.json"
+BAD_FILES_CACHE_FILE = BASE_DIR / "cache" / "bad_files_cache.json"
 
 CMD_TIMEOUT = 600
 NO_OUTPUT_TIMEOUT = 60
@@ -46,6 +47,12 @@ DOWNLOAD_CONNECT_TIMEOUT = 90
 MAX_STUCK_COUNT = 2
 # 下载坏文件剔除最大轮数：每轮移除 tdl 卡死遗留的 .tmp 对应文件，重试剩余
 MAX_BAD_FILE_ROUNDS = 3
+# 下载停滞判定：目录有未完成 .tmp 且 N 秒无新文件落盘即记一次停滞。
+# tdl 停滞时进度条仍在刷新 stdout，会不断重置静默计时，毒文件（连接成功
+# 但 0 字节，常见于转发的他 DC 媒体）必须靠本判定兜底杀掉
+DOWNLOAD_STALL_TIMEOUT = 90
+# 坏文件列入黑名单阈值：累计 N 次下载失败，之后 export 直接跳过该文件
+BAD_FILE_BLACKLIST_THRESHOLD = 2
 # 文件数达到预期后，再等待多少秒让 tdl 自然退出，超时则强制终止
 FINISH_WAIT_TIMEOUT = 30
 TDL_IGNORE_PATTERNS = [
@@ -229,6 +236,7 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None,
         last_file_count_time = time.time()
         finish_time = None  # 文件数达到预期时记录时间
         stuck_count = 0
+        file_stuck_count = 0  # 文件停滞计数（独立于 stdout 静默计数）
         should_break = False
 
         while process.poll() is None:
@@ -243,6 +251,7 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None,
                     last_output_time = time.time()
                     last_file_count_time = time.time()
                     stuck_count = 0
+                    file_stuck_count = 0
                     # 达到预期文件数，开始倒计时等待 tdl 自然退出
                     if expected_count > 0 and download_count >= expected_count and finish_time is None:
                         print(f"已下载 {download_count} 张（预期 {expected_count} 张），等待 tdl 退出...")
@@ -288,6 +297,24 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None,
                     process.wait(5)
                     should_break = True
                     break
+
+            # 文件停滞检测（独立于 stdout 静默）：tdl 停滞时进度条仍在刷新输出，
+            # 会不断重置 stdout 活跃计时。判据：有未完成 .tmp 且停滞超时无新文件落盘
+            if enable_stuck_check and target_dir and finish_time is None:
+                has_tmp = any(f.endswith(".tmp") for f in os.listdir(target_dir))
+                if has_tmp and time.time() - last_file_count_time > DOWNLOAD_STALL_TIMEOUT:
+                    file_stuck_count += 1
+                    print(f"\n[文件停滞] {DOWNLOAD_STALL_TIMEOUT}秒无新文件完成且存在 .tmp，疑似坏文件 ({file_stuck_count}/{MAX_STUCK_COUNT})...")
+                    last_file_count_time = time.time()
+                    if file_stuck_count >= MAX_STUCK_COUNT:
+                        print("连续文件停滞，终止并剔除坏文件...")
+                        process.terminate()
+                        process.wait(5)
+                        should_break = True
+                        stuck_terminated = True
+                        break
+                else:
+                    file_stuck_count = 0
 
         thread.join(5)
 
@@ -455,9 +482,21 @@ def _deduplicate_new_files(
     return downloaded, skipped
 
 
+_TDL_NAME_PREFIX_RE = re.compile(r"^\d+_\d+_")
+
+
+def _strip_tdl_name_prefix(filename: str) -> str:
+    """剥掉 tdl 落盘自动加的 <dialog_id>_<msg_id>_ 前缀，还原为 export 的 file 字段名。
+
+    export 的 file 字段是裸 unique_id（如 6123176226865222252.jpg），而 tdl dl
+    实际保存为 1434817225_319102_6123176226865222252.jpg，比对前必须归一化。
+    """
+    return _TDL_NAME_PREFIX_RE.sub("", filename, count=1)
+
+
 def filter_and_download(
     export_file: str, download_dir: str, channel: str, limit: int,
-    md5_cache: dict, progress_cache: dict
+    md5_cache: dict, progress_cache: dict, bad_cache: dict
 ) -> None:
     if not os.path.exists(export_file):
         print(f"导出文件不存在: {export_file}")
@@ -487,6 +526,14 @@ def filter_and_download(
         print(f"限制下载数量: {len(filtered)} → {limit} 张")
         filtered = filtered[:limit]
 
+    # 黑名单剔除：失败达阈值的坏文件（如转发的 0 字节毒文件）直接跳过，
+    # 否则每次 export 都会把它们加回来，整批永远差一张、进度推不动
+    before_black = len(filtered)
+    filtered = [m for m in filtered
+                if bad_cache.get(m.get("file", ""), {}).get("count", 0) < BAD_FILE_BLACKLIST_THRESHOLD]
+    if len(filtered) < before_black:
+        print(f"黑名单剔除坏文件 {before_black - len(filtered)} 张（失败≥{BAD_FILE_BLACKLIST_THRESHOLD}次，永久跳过）")
+
     if not filtered:
         print("没有找到图片")
         return
@@ -501,13 +548,15 @@ def filter_and_download(
     os.makedirs(download_dir, exist_ok=True)
 
     cached_files = set(os.listdir(download_dir)) if os.path.exists(download_dir) else set()
+    # tdl 落盘名带 <dialog_id>_<msg_id>_ 前缀，归一化后才能与 export 的 file 字段比对
+    cached_basenames = {_strip_tdl_name_prefix(f) for f in cached_files}
     print(f"目录已有 {len(cached_files)} 个文件")
 
     # 检查已存在的文件是否已覆盖所有待下载图片
     pending_filenames = {msg.get("file") for msg in filtered if msg.get("file")}
-    already_exist = pending_filenames & cached_files
+    already_exist = pending_filenames & cached_basenames
     if already_exist and len(already_exist) == len(pending_filenames):
-        print(f"所有 {len(pending_filenames)} 张图片已存在于目录中，跳过下载")
+        print(f"所有 {len(pending_filenames)} 张图片已存在于目录中（tdl 将跳过重复文件）")
     else:
         if already_exist:
             print(f"其中 {len(already_exist)} 张已存在，需下载 {len(pending_filenames) - len(already_exist)} 张")
@@ -539,6 +588,19 @@ def filter_and_download(
             print("卡死但未发现 .tmp 残留，无法定位坏文件，放弃")
             break
         print(f"⚠ 检测到坏文件 {len(bad_files)} 个，从列表剔除后重试: {sorted(bad_files)}")
+        # 记录坏文件失败次数，达到阈值进黑名单，后续运行 export 后直接跳过
+        now_iso = datetime.now().isoformat()
+        for disk_name in bad_files:
+            bare = _strip_tdl_name_prefix(disk_name)
+            entry = bad_cache.setdefault(bare, {"count": 0})
+            entry["count"] += 1
+            entry["channel"] = channel
+            entry["last_time"] = now_iso
+        save_json_cache(BAD_FILES_CACHE_FILE, bad_cache)
+        blacklisted = sorted({n for n in bad_files
+                              if bad_cache[_strip_tdl_name_prefix(n)]["count"] >= BAD_FILE_BLACKLIST_THRESHOLD})
+        if blacklisted:
+            print(f"⚠ 坏文件已列入黑名单（后续运行跳过）: {blacklisted}")
         filtered = [m for m in filtered if m.get("file") not in bad_files]
         if not filtered:
             print("剔除坏文件后无待下载图片，跳过")
@@ -547,7 +609,7 @@ def filter_and_download(
         with open(filtered_file, "w", encoding="utf-8") as f:
             json.dump({"id": data["id"], "messages": filtered}, f, ensure_ascii=False, indent=2)
         pending_filenames = {m.get("file") for m in filtered if m.get("file")}
-        need_download_count = len(pending_filenames - cached_files)
+        need_download_count = len(pending_filenames - cached_basenames)
 
     if not dl_ok:
         print(f"⚠ 下载命令执行失败，可能部分或全部图片未下载成功")
@@ -839,6 +901,7 @@ def main() -> None:
 
     md5_cache = load_json_cache(MD5_CACHE_FILE)
     progress_cache = load_json_cache(PROGRESS_CACHE_FILE)
+    bad_cache = load_json_cache(BAD_FILES_CACHE_FILE)
 
     if md5_cache:
         image_count = sum(1 for v in md5_cache.values() if is_image(v.get("filename", "")))
@@ -890,7 +953,7 @@ def main() -> None:
         export_file = os.path.join(DOWNLOAD_DIR, f"{channel}_export.json")
 
         if export_channel(channel, limit, export_file, progress_cache):
-            filter_and_download(export_file, DOWNLOAD_DIR, channel, limit, md5_cache, progress_cache)
+            filter_and_download(export_file, DOWNLOAD_DIR, channel, limit, md5_cache, progress_cache, bad_cache)
 
         if os.path.exists(export_file):
             os.remove(export_file)
