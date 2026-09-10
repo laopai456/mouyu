@@ -27,13 +27,14 @@ class ImageUploader:
         log_dir = Path(__file__).parent / 'logs'
         log_dir.mkdir(parents=True, exist_ok=True)
         
+        file_handler = logging.FileHandler(log_dir / 'upload.log', encoding='utf-8')
+        file_handler.setLevel(logging.INFO)
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.WARNING)  # 控制台只出 WARNING/ERROR，逐张明细只在 upload.log
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_dir / 'upload.log', encoding='utf-8'),
-                logging.StreamHandler(sys.stdout)
-            ]
+            handlers=[file_handler, console_handler]
         )
         # 屏蔽 qcloud_cos / tencentcloud SDK 的 INFO 噪音（如 "put object, url=..."）
         for noisy in ('qcloud_cos', 'tencentcloud'):
@@ -111,6 +112,7 @@ class ImageUploader:
         return hash_md5.hexdigest()
     
     def upload_image(self, file_path):
+        """返回结果状态: uploaded(新增) / duplicate(重复) / skipped(跳过) / failed(失败)"""
         max_retries = self.config.get('max_retry', 3)
         retry_delay = 2
         
@@ -123,8 +125,8 @@ class ImageUploader:
                         continue
                     else:
                         self.logger.warning(f"文件不存在，跳过: {file_path}")
-                        return
-                
+                        return 'skipped'
+
                 if not os.path.isfile(file_path):
                     if attempt < max_retries - 1:
                         self.logger.warning(f"不是有效文件，{retry_delay}秒后重试 ({attempt + 1}/{max_retries}): {file_path}")
@@ -132,7 +134,7 @@ class ImageUploader:
                         continue
                     else:
                         self.logger.warning(f"不是有效文件，跳过: {file_path}")
-                        return
+                        return 'skipped'
                 
                 try:
                     with open(file_path, 'rb') as f:
@@ -144,8 +146,8 @@ class ImageUploader:
                         continue
                     else:
                         self.logger.warning(f"文件被占用或无法访问，跳过: {file_path} - {e}")
-                        return
-            
+                        return 'skipped'
+
             except Exception as outer_e:
                 if attempt < max_retries - 1:
                     self.logger.warning(f"发生错误，{retry_delay}秒后重试 ({attempt + 1}/{max_retries}): {outer_e}")
@@ -153,7 +155,7 @@ class ImageUploader:
                     continue
                 else:
                     self.logger.error(f"处理图片失败 {file_path}: {str(outer_e)}")
-                    return
+                    return 'failed'
             
             md5 = self.calculate_md5(file_path)
 
@@ -163,7 +165,7 @@ class ImageUploader:
                     os.remove(file_path)
                 except Exception as e:
                     self.logger.error(f"删除重复图片失败: {e}")
-                return
+                return 'duplicate'
 
             # 传 COS 前先服务端查重，避免重复图在 COS 落对象、再被 COS 触发器写成重复待审记录
             check = self.check_md5_on_server(md5)
@@ -180,7 +182,7 @@ class ImageUploader:
                     os.remove(file_path)
                 except Exception as e:
                     self.logger.error(f"删除{reason}图片失败: {e}")
-                return
+                return 'duplicate'
 
             file_ext = Path(file_path).suffix.lower()
             needs_compress = file_ext in ['.png', '.bmp', '.webp', '.tiff']
@@ -192,7 +194,7 @@ class ImageUploader:
                 file_content = self.compress_to_jpeg(file_path)
                 if not file_content:
                     self.logger.error(f"图片压缩失败，跳过: {file_path}")
-                    return
+                    return 'failed'
                 cloud_filename = f"{timestamp}_{Path(file_path).stem}.jpg"
             else:
                 with open(file_path, 'rb') as f:
@@ -205,7 +207,7 @@ class ImageUploader:
 
             if not upload_result['success']:
                 self.logger.error(f"上传失败: {upload_result.get('message', '未知错误')} - {file_path}")
-                return
+                return 'failed'
 
             file_id = upload_result['file_id']
 
@@ -226,6 +228,7 @@ class ImageUploader:
                         os.remove(file_path)
                     except Exception as e:
                         self.logger.error(f"清理本地文件失败: {e}")
+                return 'uploaded'
             else:
                 fail_msg = db_result.get('message', '未知错误')
                 if '已存在' in fail_msg or '永久拒绝' in fail_msg:
@@ -241,12 +244,13 @@ class ImageUploader:
                         os.remove(file_path)
                     except Exception as e:
                         self.logger.error(f"删除重复图片失败: {e}")
+                    return 'duplicate'
                 else:
                     self.logger.error(f"数据库写入失败: {fail_msg} - {file_path}")
+                    return 'failed'
 
-            return
-        
         self.logger.error(f"达到最大重试次数，上传失败: {file_path}")
+        return 'failed'
     
     def upload_to_cos(self, cloud_path, file_content):
         try:
@@ -381,22 +385,29 @@ def main():
     print("扫描现有图片...")
     print("="*50)
     
+    total_stats = {'uploaded': 0, 'duplicate': 0, 'skipped': 0, 'failed': 0}
+    label = {'uploaded': '新增', 'duplicate': '重复', 'skipped': '跳过', 'failed': '失败'}
+
     for folder in config['watch_folders']:
         if folder['enabled']:
             watch_path = folder['path']
             if os.path.exists(watch_path):
                 print(f"\n扫描文件夹: {watch_path}")
+                folder_stats = dict.fromkeys(total_stats, 0)
                 image_count = 0
                 for root, dirs, files in os.walk(watch_path):
                     for file in files:
                         if event_handler.is_image(file):
                             file_path = os.path.join(root, file)
-                            event_handler.upload_image(file_path)
+                            result = event_handler.upload_image(file_path) or 'skipped'
+                            folder_stats[result] = folder_stats.get(result, 0) + 1
                             image_count += 1
-                print(f"  共找到 {image_count} 张图片")
-    
+                for k in folder_stats:
+                    total_stats[k] += folder_stats[k]
+                print(f"  共 {image_count} 张: " + ", ".join(f"{label[k]} {folder_stats[k]}" for k in ('uploaded', 'duplicate', 'skipped', 'failed')))
+
     print("\n" + "="*50)
-    print("✓ 自动上传完成")
+    print("✓ 自动上传完成: " + ", ".join(f"{label[k]} {total_stats[k]}" for k in ('uploaded', 'duplicate', 'skipped', 'failed')))
     print("="*50)
     print()
 
