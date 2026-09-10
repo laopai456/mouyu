@@ -5,8 +5,14 @@ import json
 import hashlib
 import logging
 import io
+import warnings
 from datetime import datetime
 from pathlib import Path
+
+# requests 启动时自检依赖版本（urllib3/chardet）发的提示性告警，不影响功能；
+# 必须在引入 requests 的库（qcloud_cos/tencentcloud）之前按消息过滤（此时拿不到告警类本身）
+warnings.filterwarnings("ignore", message=".*doesn't match a supported version.*")
+
 from PIL import Image
 from qcloud_cos import CosConfig
 from qcloud_cos import CosS3Client
