@@ -9,8 +9,9 @@
   1. 日志分流：FileHandler 保持 INFO（明细全在 `logs/upload.log`），StreamHandler 降到 WARNING（控制台只出告警/错误）。
   2. `upload_image` 全部退出点返回状态：uploaded / duplicate / skipped / failed（原来返回 None）。
   3. 主循环统计：每文件夹一行 `共 N 张: 新增 X, 重复 Y, 跳过 Z, 失败 W`，结尾总计行。
-- **验证**：py_compile 过；grep 审计 upload_image 全部 11 个退出点均带状态返回，主循环对 None 兜底归 skipped。未真跑（会真传 COS，等下轮定时任务看控制台效果）。
-- **提交**：70d9871（tools/uploader 在 .gitignore 但文件本身已被跟踪，add 正常）。
+  4. 屏蔽 requests 启动自检告警（`RequestsDependencyWarning: urllib3/chardet doesn't match`）：提示性、不影响功能，在引入 qcloud_cos 之前按消息 filterwarnings 过滤（告警类本身拿不到，只能按消息匹配）。
+- **验证**：py_compile 过；grep 审计 upload_image 全部 11 个退出点均带状态返回，主循环对 None 兜底归 skipped；`simplefilter('error')` + 消息过滤下 `import requests` 无告警（过滤生效）；实际 import uploader 模块零告警输出。未真跑（会真传 COS，等下轮定时任务看控制台效果）。
+- **提交**：70d9871 + d135841（tools/uploader 在 .gitignore 但文件本身已被跟踪，add 正常）。
 
 
 ## 2026-09-08 tdl 调用层优化：砍登录预检 + 统一 --reconnect-timeout 60s（每次任务少付一次握手税）
