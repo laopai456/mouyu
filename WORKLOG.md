@@ -2,6 +2,17 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-10 uploader 控制台日志降噪：逐张明细只进 upload.log，控制台只留汇总+告警
+
+- **背景**：uploader 每传一张图控制台打一行 `✓ 文件名`（INFO），批量跑时刷屏，用户明确不需要逐张名字/时间。
+- **改动**（仅 `tools/uploader/uploader.py`）：
+  1. 日志分流：FileHandler 保持 INFO（明细全在 `logs/upload.log`），StreamHandler 降到 WARNING（控制台只出告警/错误）。
+  2. `upload_image` 全部退出点返回状态：uploaded / duplicate / skipped / failed（原来返回 None）。
+  3. 主循环统计：每文件夹一行 `共 N 张: 新增 X, 重复 Y, 跳过 Z, 失败 W`，结尾总计行。
+- **验证**：py_compile 过；grep 审计 upload_image 全部 11 个退出点均带状态返回，主循环对 None 兜底归 skipped。未真跑（会真传 COS，等下轮定时任务看控制台效果）。
+- **提交**：70d9871（tools/uploader 在 .gitignore 但文件本身已被跟踪，add 正常）。
+
+
 ## 2026-09-08 tdl 调用层优化：砍登录预检 + 统一 --reconnect-timeout 60s（每次任务少付一次握手税）
 
 - **背景**：每次定时任务起 ~11 个 tdl 进程（1 预检 + 5 export + 5 dl），每个都付一次 MTProto 握手税（实测 1.5~30s 波动，慢在 tdl 冷启动握手+内部静默重连，默认退避上限 5m）。
