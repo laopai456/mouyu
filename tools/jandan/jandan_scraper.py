@@ -13,6 +13,8 @@
   - 请求间隔在区间内随机抖动；每 8~14 个请求随机长歇 1~3 分钟（像人在翻页看图）
   - 启动前随机等待，避免定时任务每次在同一秒打点
   - 429/5xx 指数退避重试，连续失败即整轮收手装死，下轮再续
+  - 图片连续失败达阈值即熔断装死（疑似被图床限流时立即收手）
+  - 目标文件已存在则幂等跳过（增量状态丢失也不会重复下载）
   - 每轮滴灌式上限（默认 30 图 / 25 个 API 页），跑完静默退出，增量状态记在 cache/state.json
 
 产物落盘到 save_dir（默认 C:\\Users\\w\\Downloads\\jandan），由 uploader 的 watch_folders
@@ -64,8 +66,9 @@ DEFAULT_CONFIG = {
     "max_images_per_run": 30,          # 每轮最多下载图片数（滴灌上限）
     "max_api_pages_per_run": 25,       # 每轮最多翻的 API 页数
     "min_vote_positive": 0,            # 吐槽最低赞数过滤（0=不限，日报本身已按热度排序）
-    "page_size": 20,
-    "backfill_days": 40,               # 首轮回溯天数（接口目前共 ~41 天）
+    "page_size": 10,                   # 接口实测固定返回赞数 top10（page/page_size 参数被忽略，疑似 CDN 缓存键不含分页）
+    "max_consecutive_img_fail": 5,     # 图片连续失败 N 次即熔断装死（疑似被限流时立即收手）
+    "backfill_days": 2,                # 只处理最新 N 天日报（默认 2：昨天+今天；旧的无时效性不回溯）
     "connect_timeout": 10,
     "read_timeout": 30,
     "max_retries": 3,
@@ -154,6 +157,7 @@ class JandanScraper:
             self.save_dir.mkdir(parents=True, exist_ok=True)
         self.downloaded = 0
         self.pages_used = 0
+        self.img_fail_streak = 0
         self.stop_reason = None
 
         self.sess = requests.Session()
@@ -219,11 +223,24 @@ class JandanScraper:
 
     # ---------- 图片 ----------
 
+    def _img_fail(self, level: int, comment_id: int, msg: str) -> None:
+        """图片失败/跳过统一入口：连击计数，连续失败达到阈值即熔断装死（疑似被限流）"""
+        LOGGER.log(level, msg)
+        self.img_fail_streak += 1
+        if self.img_fail_streak >= self.cfg["max_consecutive_img_fail"]:
+            self.stop_reason = f"图片连续失败{self.img_fail_streak}次，疑似被限流，装死收工"
+            LOGGER.warning("JANDAN_IMG_BREAKER %s", self.stop_reason)
+
     def download_image(self, url: str, comment_id: int, idx: int) -> bool:
         ext = Path(url.split("?")[0]).suffix.lower()
         if ext not in ALLOWED_EXTS:
             ext = ""  # 从 Content-Type 补
         path = self.save_dir / f"{comment_id}_{idx}{ext}"
+
+        # 幂等兜底：目标文件已在本地（状态文件丢失/重置过也不重复下载、不报错）
+        if not self.dry_run and path.exists():
+            LOGGER.info("JANDAN_IMG_HAVE id=%s 本地已存在 %s", comment_id, path.name)
+            return True
 
         self.pacer.pace("img")
         try:
@@ -233,15 +250,15 @@ class JandanScraper:
                 "Referer": f"{BASE}/",
             }, stream=True)
         except requests.RequestException as e:
-            LOGGER.error("JANDAN_IMG_FAIL id=%s %s err=%s", comment_id, url, e)
+            self._img_fail(logging.ERROR, comment_id, f"JANDAN_IMG_FAIL id={comment_id} {url} err={e}")
             return False
 
         ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         if r.status_code == 404 or "text/html" in ctype:
-            LOGGER.warning("JANDAN_IMG_SKIP id=%s 无效资源(%s) %s", comment_id, ctype or r.status_code, url)
+            self._img_fail(logging.WARNING, comment_id, f"JANDAN_IMG_SKIP id={comment_id} 无效资源({ctype or r.status_code}) {url}")
             return False
         if not ctype.startswith("image/"):
-            LOGGER.warning("JANDAN_IMG_SKIP id=%s 非图片Content-Type=%s %s", comment_id, ctype, url)
+            self._img_fail(logging.WARNING, comment_id, f"JANDAN_IMG_SKIP id={comment_id} 非图片Content-Type={ctype} {url}")
             return False
         if not ext:
             ext = "." + (ctype.split("/", 1)[1] if "/" in ctype else "jpg")
@@ -262,16 +279,17 @@ class JandanScraper:
                         raise ValueError("超过大小上限")
                     f.write(chunk)
             if size < MIN_BYTES:
-                LOGGER.warning("JANDAN_IMG_SKIP id=%s 过小%dB %s", comment_id, size, url)
                 tmp.unlink(missing_ok=True)
+                self._img_fail(logging.WARNING, comment_id, f"JANDAN_IMG_SKIP id={comment_id} 过小{size}B {url}")
                 return False
             tmp.rename(path)
         except Exception as e:  # 下载中途断流/超大
             tmp.unlink(missing_ok=True)
-            LOGGER.error("JANDAN_IMG_FAIL id=%s size=%dB err=%s %s", comment_id, size, e, url)
+            self._img_fail(logging.ERROR, comment_id, f"JANDAN_IMG_FAIL id={comment_id} size={size}B err={e} {url}")
             return False
 
         self.downloaded += 1
+        self.img_fail_streak = 0
         LOGGER.info("JANDAN_IMG_OK id=%s %dB %s", comment_id, size, path.name)
         return True
 
@@ -287,10 +305,10 @@ class JandanScraper:
         for date in dates:
             if self.stop_reason:
                 break
-            if date in done:
-                continue
+            # 不按 done_dates 跳过：窗口内日报当天可能仍在滚动增长，每轮重扫，
+            # 已处理过的评论靠 seen_comment_ids 去重（秒过，不重复下载）
             page, date_done = 1, False
-            LOGGER.info("JANDAN_DATE_START %s 待处理", date)
+            LOGGER.info("JANDAN_DATE_START %s 扫描中", date)
             while not date_done and not self.stop_reason:
                 if self.pages_used >= self.cfg["max_api_pages_per_run"]:
                     self.stop_reason = f"API页数达上限{self.cfg['max_api_pages_per_run']}"
@@ -306,6 +324,11 @@ class JandanScraper:
 
                 items = data.get("list") or []
                 if not items:
+                    date_done = True
+                    break
+                if page > 1 and all(item["id"] in seen for item in items):
+                    # 接口实测 page 参数被忽略（p2 返回内容=p1），整页全已处理即停翻本日，省请求
+                    LOGGER.info("JANDAN_PAGE_DUP %s p%d 整页与已处理重复，停翻本日", date, page)
                     date_done = True
                     break
                 LOGGER.info("JANDAN_PAGE_OK %s p%d %d条", date, page, len(items))
@@ -362,7 +385,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="煎蛋无聊图日报慢速抓取器")
     ap.add_argument("--max-images", type=int, help="本轮最多下载图片数（默认取配置）")
     ap.add_argument("--max-pages", type=int, help="本轮最多 API 页数（默认取配置）")
-    ap.add_argument("--backfill-days", type=int, help="回溯天数（默认取配置）")
+    ap.add_argument("--backfill-days", type=int, help="只抓最新 N 天日报（默认 2：昨天+今天）")
     ap.add_argument("--min-votes", type=int, help="最低赞数过滤（默认取配置）")
     ap.add_argument("--save-dir", help="图片保存目录（默认取配置）")
     ap.add_argument("--delay-scale", type=float, default=1.0,

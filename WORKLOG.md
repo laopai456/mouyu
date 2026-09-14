@@ -2,6 +2,14 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-14 煎蛋抓取器安全审计+加固（用户要求"先稳"）
+
+- **探测定性**：① comments/reports 接口的 page/page_size 参数**被忽略**（p2 返回内容=p1，无论 page_size 10/20；reports 也只回 top10），疑似 CDN 缓存键不含查询参数——意味着每天实际只能拿到赞数 top10，且读请求大多打在 CDN 边缘不触源站（对防封反而是好事）；② 之前那个返回 text/html 的 gif 复测是真 404 死链，**不是限流**，图片侧无被打压迹象。
+- **加固**（仅 `tools/jandan/jandan_scraper.py`）：① page_size 20→10（符合接口实际行为）；② 整页与已处理完全重复即停翻本日（`JANDAN_PAGE_DUP`），省掉分页无效的浪费请求；③ 目标文件已存在→`JANDAN_IMG_HAVE` 幂等秒跳过（状态文件丢失/重置也不会重复下载，顺带治了之前 WinError 183 重复下载报错的病根）；④ 图片连续失败≥5 次熔断装死（`JANDAN_IMG_BREAKER`，疑似被限流立即收手，阈值可配 `max_consecutive_img_fail`）。
+- **原速实测**（不缩延迟，cap 1 图）：启动随机等 59s → 请求间隔 11.5s/20.1s/24.4s/39.7s → 6 个请求共 2.5 分钟；5 个已有文件全部 HAVE 秒跳过零网络请求；状态里 3 条 ok:False 脏数据被 HAVE 成功自愈为 ok:True。**节奏符合设计，比真人刷页面慢一个数量级。**
+- **提交**：见 git log（fix(tools) 煎蛋抓取器安全加固）。
+- **防封观察哨**：`grep JANDAN_BACKOFF\|JANDAN_IMG_BREAKER\|JANDAN_ABORT tools/jandan/logs/jandan.log`——偶发正常（网络波动/死链），连续多轮出现才说明被针对，届时把 config.json 的 delay 区间加大即可。
+
 ## 2026-09-14 新数据源：煎蛋无聊图日报慢速拟人抓取器（tools/jandan）
 
 - **背景**：用户要求抓 jandan.net/new/daily（无聊图热门日报），尽量拟人防封、慢速静默滴灌。
