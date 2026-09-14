@@ -2,6 +2,16 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-14 新数据源：煎蛋无聊图日报慢速拟人抓取器（tools/jandan）
+
+- **背景**：用户要求抓 jandan.net/new/daily（无聊图热门日报），尽量拟人防封、慢速静默滴灌。
+- **侦察结论**：站点是 Vue SPA，真实数据接口免登录——`/api/v1/daily-hot/reports`（日期列表，近 ~41 天）→ `/api/v1/daily-hot/comments?date=&sort=vote_desc&page=&page_size=`（当日热门吐槽，`content` 内嵌 `<img src>`，图床 img.toto.im / img.wangmoyu.com）。robots.txt 只禁搜索引擎爬虫的 wp-admin/分类/搜索页，本工具走的接口不在禁区。
+- **新工具** `tools/jandan/jandan_scraper.py`（requests 单依赖）：整轮固定真实 Chrome UA + 分请求类型拟真头（API 仿 axios / 图片仿 `<img>` 加载带同源 Referer）、Session 复用连接保留 cookie、间隔区间随机抖动（API 10-25s / 图 15-40s）、每 8-14 请求随机长歇 1-3 分钟、启动随机等待错开定时打点、429/5xx 退避重试后装死收手下轮续传、每轮滴灌上限（默认 30 图/25 API 页）。增量状态记 `cache/state.json`（seen 评论 id + done 日期，dry-run 不落状态）。产物落 `C:\Users\w\Downloads\jandan`。
+- **接入**：uploader `watch_folders` 已加「煎蛋无聊图日报」目录；`.gitignore` 加 `tools/jandan/{cache,logs,config.json}`（脚本本体入库无秘密）。
+- **验证**：py_compile 过；dry-run 验证接口解析/候选提取/上限逻辑（顺带修掉 dry-run 污染状态的 bug）；真跑下载 3 张（delay-scale 0.15 快速档）全部 PIL 校验有效（PNG 1024×1024 / JPEG 1024×1360 / 600×875）；状态文件正确（4 seen、0 done）。**默认慢速档未整轮长跑**（无必要，节奏参数就是纯 sleep）。
+- **修坑记录**：① dry-run 会把评论标 seen → 改为 dry-run 全程不写状态；② 保存目录不存在导致写 .part 报 No such file → init 时 mkdir。
+- **下一步**：把 `py tools/jandan/jandan_scraper.py` 挂进现有定时任务（跟 tdl/uploader 同批即可，自带随机启动等待不怕撞车）；首轮回溯约 40 天 ≈ 数轮跑完，之后每天只增量 1 天。质量过滤 `min_vote_positive` 默认 0（日报本身已按热度排序），想更挑可配。
+
 ## 2026-09-10 uploader 控制台日志降噪：逐张明细只进 upload.log，控制台只留汇总+告警
 
 - **背景**：uploader 每传一张图控制台打一行 `✓ 文件名`（INFO），批量跑时刷屏，用户明确不需要逐张名字/时间。

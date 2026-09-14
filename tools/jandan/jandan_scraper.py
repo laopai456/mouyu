@@ -1,0 +1,396 @@
+# -*- coding: utf-8 -*-
+"""
+煎蛋无聊图日报抓取器（慢速拟人版）
+
+数据源（前端 SPA 同款接口，无需登录）：
+  1. GET /api/v1/daily-hot/reports?page=1&page_size=50   → 日报日期列表（近 ~40 天）
+  2. GET /api/v1/daily-hot/comments?date=YYYY-MM-DD&sort=vote_desc&page=N&page_size=20
+     → 当日热门吐槽，content 字段内嵌 <img src="...">，图床为 img.toto.im / img.wangmoyu.com 等
+
+拟人策略（默认参数刻意保守，慢是特性不是缺陷）：
+  - 整轮固定一个真实 Chrome UA + 完整浏览器头（API 仿 axios，图片仿 <img> 加载）
+  - requests.Session 复用连接 + 保留服务端下发的 cookie
+  - 请求间隔在区间内随机抖动；每 8~14 个请求随机长歇 1~3 分钟（像人在翻页看图）
+  - 启动前随机等待，避免定时任务每次在同一秒打点
+  - 429/5xx 指数退避重试，连续失败即整轮收手装死，下轮再续
+  - 每轮滴灌式上限（默认 30 图 / 25 个 API 页），跑完静默退出，增量状态记在 cache/state.json
+
+产物落盘到 save_dir（默认 C:\\Users\\w\\Downloads\\jandan），由 uploader 的 watch_folders
+接力上传 COS（uploader 侧还有 md5 去重兜底）。
+
+用法：
+  py tools/jandan/jandan_scraper.py                     # 默认慢速滴灌
+  py tools/jandan/jandan_scraper.py --max-images 5      # 临时改上限
+  py tools/jandan/jandan_scraper.py --dry-run           # 只看候选不下载
+  py tools/jandan/jandan_scraper.py --delay-scale 0.2   # 测试用：等比压缩所有延迟（勿常驻）
+可选 tools/jandan/config.json 覆盖默认参数（键同 DEFAULT_CONFIG，运行时目录不入库）。
+"""
+
+import argparse
+import json
+import logging
+import random
+import re
+import sys
+import time
+from pathlib import Path
+
+import requests
+
+BASE = "https://jandan.net"
+REPORTS_URL = f"{BASE}/api/v1/daily-hot/reports"
+COMMENTS_URL = f"{BASE}/api/v1/daily-hot/comments"
+PAGE_URL = f"{BASE}/new/daily"
+
+# 近两年主流桌面 Chrome，轮换太勤反而假，整轮抽一个固定用
+UA_POOL = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+]
+
+IMG_URL_RE = re.compile(r'<img\s[^>]*?src="(https?://[^"]+)"', re.I)
+ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+MIN_BYTES, MAX_BYTES = 5 * 1024, 25 * 1024 * 1024
+
+DEFAULT_CONFIG = {
+    "save_dir": r"C:\Users\w\Downloads\jandan",
+    "api_delay_range": [10, 25],       # API 请求间隔（秒，区间随机）
+    "img_delay_range": [15, 40],       # 图片下载间隔（秒，区间随机）
+    "rest_every_range": [8, 14],       # 每随机 N 个请求歇一会儿
+    "rest_range": [60, 180],           # 长歇时长（秒）
+    "start_jitter_range": [10, 70],    # 启动前随机等待（秒）
+    "max_images_per_run": 30,          # 每轮最多下载图片数（滴灌上限）
+    "max_api_pages_per_run": 25,       # 每轮最多翻的 API 页数
+    "min_vote_positive": 0,            # 吐槽最低赞数过滤（0=不限，日报本身已按热度排序）
+    "page_size": 20,
+    "backfill_days": 40,               # 首轮回溯天数（接口目前共 ~41 天）
+    "connect_timeout": 10,
+    "read_timeout": 30,
+    "max_retries": 3,
+    "retry_backoff_range": [60, 120],  # 429/5xx 重试前退避（秒）
+}
+
+LOGGER = logging.getLogger("jandan")
+
+
+def setup_logging(log_dir: Path) -> None:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    fh = logging.FileHandler(log_dir / "jandan.log", encoding="utf-8")
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(fmt)
+    # 控制台只出告警/错误 + 结尾汇总，逐张明细全在日志文件（与 uploader 一致）
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setLevel(logging.WARNING)
+    sh.setFormatter(fmt)
+    LOGGER.addHandler(fh)
+    LOGGER.addHandler(sh)
+    LOGGER.setLevel(logging.INFO)
+
+
+def load_config(base_dir: Path) -> dict:
+    cfg = dict(DEFAULT_CONFIG)
+    cfg_file = base_dir / "config.json"
+    if cfg_file.exists():
+        try:
+            cfg.update(json.loads(cfg_file.read_text(encoding="utf-8")))
+            LOGGER.info("JANDAN_CONFIG_LOADED 覆盖默认配置: %s", cfg_file)
+        except (json.JSONDecodeError, OSError) as e:
+            LOGGER.warning("JANDAN_CONFIG_BAD 配置读取失败，用默认值: %s", e)
+    return cfg
+
+
+def load_state(cache_dir: Path) -> dict:
+    f = cache_dir / "state.json"
+    if f.exists():
+        try:
+            return json.loads(f.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            LOGGER.warning("JANDAN_STATE_BAD 状态文件损坏，从头开始（uploader md5 去重兜底）")
+    return {"seen_comment_ids": {}, "done_dates": []}
+
+
+def save_state(cache_dir: Path, state: dict) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    f = cache_dir / "state.json"
+    f.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+
+class HumanPacer:
+    """拟人节奏器：抖动间隔 + 周期性长歇 + 可整体缩放（测试用）"""
+
+    def __init__(self, cfg: dict, scale: float):
+        self.cfg = cfg
+        self.scale = max(0.0, scale)
+        self._req_count = 0
+        self._rest_at = random.randint(*cfg["rest_every_range"])
+
+    def _sleep(self, sec: float, reason: str) -> None:
+        sec = sec * self.scale
+        if sec > 0:
+            LOGGER.info("JANDAN_PACE_WAIT %s %.1fs", reason, sec)
+            time.sleep(sec)
+
+    def pace(self, kind: str) -> None:
+        lo, hi = self.cfg[f"{kind}_delay_range"]
+        self._sleep(random.uniform(lo, hi), f"{kind}_delay")
+        self._req_count += 1
+        if self._req_count >= self._rest_at:
+            lo, hi = self.cfg["rest_range"]
+            self._sleep(random.uniform(lo, hi), "rest")
+            self._rest_at = self._req_count + random.randint(*self.cfg["rest_every_range"])
+
+
+class JandanScraper:
+    def __init__(self, cfg: dict, dry_run: bool, scale: float):
+        self.cfg = cfg
+        self.dry_run = dry_run
+        self.pacer = HumanPacer(cfg, scale)
+        self.state = load_state(Path(__file__).parent / "cache")
+        self.save_dir = Path(cfg["save_dir"])
+        if not self.dry_run:
+            self.save_dir.mkdir(parents=True, exist_ok=True)
+        self.downloaded = 0
+        self.pages_used = 0
+        self.stop_reason = None
+
+        self.sess = requests.Session()
+        self.sess.headers.update({
+            "User-Agent": random.choice(UA_POOL),
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        })
+
+    # ---------- 底层请求 ----------
+
+    def _get(self, url: str, headers: dict, **kw) -> requests.Response:
+        timeout = (self.cfg["connect_timeout"], self.cfg["read_timeout"])
+        last_exc = None
+        for attempt in range(1, self.cfg["max_retries"] + 1):
+            try:
+                r = self.sess.get(url, headers=headers, timeout=timeout, **kw)
+                if r.status_code in (429, 500, 502, 503, 504):
+                    raise requests.HTTPError(f"HTTP {r.status_code}")
+                return r
+            except requests.RequestException as e:
+                last_exc = e
+                if attempt >= self.cfg["max_retries"]:
+                    break
+                lo, hi = self.cfg["retry_backoff_range"]
+                wait = random.uniform(lo, hi) * attempt
+                LOGGER.warning("JANDAN_BACKOFF 第%d次失败(%s) 退避%.0fs", attempt, e, wait)
+                time.sleep(wait * self.pacer.scale)
+        raise last_exc
+
+    def get_reports(self) -> list:
+        # 先像真人一样"打开页面"（CDN 缓存的 SPA 壳，顺带预热 cookie），再调接口
+        self.pacer.pace("api")
+        self._get(PAGE_URL, headers={
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Referer": "https://jandan.net/",
+        })
+        self.pacer.pace("api")
+        r = self._get(REPORTS_URL, params={"page": 1, "page_size": 50}, headers={
+            "Accept": "application/json, text/plain, */*",   # 仿站内 axios
+            "Referer": PAGE_URL,
+        })
+        data = r.json()
+        if data.get("code") != 0:
+            raise RuntimeError(f"reports 接口返回 code={data.get('code')} msg={data.get('msg')}")
+        dates = [item["report_date"] for item in data["data"]["list"]]
+        LOGGER.info("JANDAN_REPORTS_OK 共%d天日报 最新%s", len(dates), dates[0] if dates else "-")
+        return dates
+
+    def get_comments(self, date: str, page: int) -> dict:
+        self.pacer.pace("api")
+        self.pages_used += 1
+        r = self._get(COMMENTS_URL, params={
+            "date": date, "sort": "vote_desc", "page": page,
+            "page_size": self.cfg["page_size"],
+        }, headers={
+            "Accept": "application/json, text/plain, */*",
+            "Referer": f"{PAGE_URL}/date/{date}",
+        })
+        data = r.json()
+        if data.get("code") != 0:
+            raise RuntimeError(f"comments 接口返回 code={data.get('code')} msg={data.get('msg')}")
+        return data["data"]
+
+    # ---------- 图片 ----------
+
+    def download_image(self, url: str, comment_id: int, idx: int) -> bool:
+        ext = Path(url.split("?")[0]).suffix.lower()
+        if ext not in ALLOWED_EXTS:
+            ext = ""  # 从 Content-Type 补
+        path = self.save_dir / f"{comment_id}_{idx}{ext}"
+
+        self.pacer.pace("img")
+        try:
+            r = self._get(url, headers={
+                # 仿浏览器加载 <img>：页面同源 Referer + 图片专用 Accept
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Referer": f"{BASE}/",
+            }, stream=True)
+        except requests.RequestException as e:
+            LOGGER.error("JANDAN_IMG_FAIL id=%s %s err=%s", comment_id, url, e)
+            return False
+
+        ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if r.status_code == 404 or "text/html" in ctype:
+            LOGGER.warning("JANDAN_IMG_SKIP id=%s 无效资源(%s) %s", comment_id, ctype or r.status_code, url)
+            return False
+        if not ctype.startswith("image/"):
+            LOGGER.warning("JANDAN_IMG_SKIP id=%s 非图片Content-Type=%s %s", comment_id, ctype, url)
+            return False
+        if not ext:
+            ext = "." + (ctype.split("/", 1)[1] if "/" in ctype else "jpg")
+            ext = ext.replace("jpeg", "jpg")
+            path = self.save_dir / f"{comment_id}_{idx}{ext}"
+
+        if self.dry_run:
+            LOGGER.info("JANDAN_CAND(DRY) id=%s %s", comment_id, url)
+            return True
+
+        size = 0
+        tmp = path.with_suffix(path.suffix + ".part")
+        try:
+            with tmp.open("wb") as f:
+                for chunk in r.iter_content(chunk_size=64 * 1024):
+                    size += len(chunk)
+                    if size > MAX_BYTES:
+                        raise ValueError("超过大小上限")
+                    f.write(chunk)
+            if size < MIN_BYTES:
+                LOGGER.warning("JANDAN_IMG_SKIP id=%s 过小%dB %s", comment_id, size, url)
+                tmp.unlink(missing_ok=True)
+                return False
+            tmp.rename(path)
+        except Exception as e:  # 下载中途断流/超大
+            tmp.unlink(missing_ok=True)
+            LOGGER.error("JANDAN_IMG_FAIL id=%s size=%dB err=%s %s", comment_id, size, e, url)
+            return False
+
+        self.downloaded += 1
+        LOGGER.info("JANDAN_IMG_OK id=%s %dB %s", comment_id, size, path.name)
+        return True
+
+    # ---------- 主流程 ----------
+
+    def run(self) -> None:
+        cache_dir = Path(__file__).parent / "cache"
+        dates = self.get_reports()[: self.cfg["backfill_days"]]
+        done = set(self.state["done_dates"])
+        seen = self.state["seen_comment_ids"]
+        candidates = 0
+
+        for date in dates:
+            if self.stop_reason:
+                break
+            if date in done:
+                continue
+            page, date_done = 1, False
+            LOGGER.info("JANDAN_DATE_START %s 待处理", date)
+            while not date_done and not self.stop_reason:
+                if self.pages_used >= self.cfg["max_api_pages_per_run"]:
+                    self.stop_reason = f"API页数达上限{self.cfg['max_api_pages_per_run']}"
+                    LOGGER.info("JANDAN_CAP_REACHED %s", self.stop_reason)
+                    break
+                try:
+                    data = self.get_comments(date, page)
+                except (RuntimeError, requests.RequestException, ValueError) as e:
+                    # 连续退避重试后仍失败：装死收手，状态留在半途，下轮续传
+                    self.stop_reason = f"接口异常:{e}"
+                    LOGGER.error("JANDAN_ABORT %s", self.stop_reason)
+                    break
+
+                items = data.get("list") or []
+                if not items:
+                    date_done = True
+                    break
+                LOGGER.info("JANDAN_PAGE_OK %s p%d %d条", date, page, len(items))
+
+                for item in items:
+                    cid = item["id"]
+                    if cid in seen:
+                        continue
+                    if item.get("vote_positive", 0) < self.cfg["min_vote_positive"]:
+                        if not self.dry_run:
+                            seen[cid] = {"date": date, "why": "low_vote"}
+                        continue
+                    urls = [u for u in IMG_URL_RE.findall(item.get("content") or "")]
+                    if not urls:
+                        if not self.dry_run:
+                            seen[cid] = {"date": date, "why": "no_img"}
+                        continue
+                    candidates += len(urls)
+                    ok_all = True
+                    for i, u in enumerate(urls, 1):
+                        if self.downloaded >= self.cfg["max_images_per_run"]:
+                            self.stop_reason = f"图片数达上限{self.cfg['max_images_per_run']}"
+                            LOGGER.info("JANDAN_CAP_REACHED %s", self.stop_reason)
+                            ok_all = False
+                            break
+                        if not self.download_image(u, cid, i):
+                            ok_all = False
+                    # 无论成败都记 seen：失败项多为源已失效，不无限重试（uploader md5 兜底重复）
+                    if not self.dry_run:
+                        seen[cid] = {"date": date, "imgs": len(urls), "ok": ok_all}
+                        save_state(cache_dir, self.state)
+                    if self.stop_reason:
+                        break
+
+                total_pages = -(-data.get("total", 0) // self.cfg["page_size"])  # ceil
+                page += 1
+                if page > total_pages:
+                    date_done = True
+
+            if date_done and not self.stop_reason and not self.dry_run:
+                done.add(date)
+                self.state["done_dates"] = sorted(done)
+                save_state(cache_dir, self.state)
+                LOGGER.info("JANDAN_DATE_DONE %s", date)
+
+        # 收尾
+        LOGGER.info(
+            "JANDAN_RUN_END 下载%d张 候选%d张 API页%d 已完成天数%d 停因=%s",
+            self.downloaded, candidates, self.pages_used, len(done), self.stop_reason or "自然跑完",
+        )
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="煎蛋无聊图日报慢速抓取器")
+    ap.add_argument("--max-images", type=int, help="本轮最多下载图片数（默认取配置）")
+    ap.add_argument("--max-pages", type=int, help="本轮最多 API 页数（默认取配置）")
+    ap.add_argument("--backfill-days", type=int, help="回溯天数（默认取配置）")
+    ap.add_argument("--min-votes", type=int, help="最低赞数过滤（默认取配置）")
+    ap.add_argument("--save-dir", help="图片保存目录（默认取配置）")
+    ap.add_argument("--delay-scale", type=float, default=1.0,
+                    help="所有延迟等比缩放，仅测试用（0.2=五分之一速）")
+    ap.add_argument("--dry-run", action="store_true", help="只列候选图片不落盘")
+    args = ap.parse_args()
+
+    base_dir = Path(__file__).parent
+    setup_logging(base_dir / "logs")
+    cfg = load_config(base_dir)
+    for k, a in (("max_images_per_run", args.max_images), ("max_api_pages_per_run", args.max_pages),
+                 ("backfill_days", args.backfill_days), ("min_vote_positive", args.min_votes),
+                 ("save_dir", args.save_dir)):
+        if a is not None:
+            cfg[k] = a
+
+    jitter = random.uniform(*cfg["start_jitter_range"]) * max(0.0, args.delay_scale)
+    LOGGER.info("JANDAN_RUN_START dry_run=%s 上限=图%d/页%s 启动等待%.0fs",
+                args.dry_run, cfg["max_images_per_run"], cfg["max_api_pages_per_run"], jitter)
+    time.sleep(jitter)
+
+    try:
+        JandanScraper(cfg, args.dry_run, args.delay_scale).run()
+    except Exception:
+        LOGGER.exception("JANDAN_FATAL 未预期异常")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

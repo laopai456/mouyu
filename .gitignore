@@ -8,6 +8,11 @@ node_modules/
 tools/uploader/
 tools/tdl_downloader/
 
+# 煎蛋抓取器运行时产物（脚本本体入库，状态/日志/本地配置不入库）
+tools/jandan/cache/
+tools/jandan/logs/
+tools/jandan/config.json
+
 tools/telegram-parser/temp_tdata/
 tools/telegram-parser/__pycache__/
 tools/telegram-parser/**/__pycache__/
