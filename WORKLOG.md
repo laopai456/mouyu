@@ -2,6 +2,14 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-14 GUI 重新打包：标题栏图标修复 + exe 模式 venv 查找真 bug（用户点 TG下载失败暴露）
+
+- **背景**：用户提醒"工具没重新编译+标题栏图标不对"。exe 是 9/6 打包的，本轮所有改动（三按钮/煎蛋入口）都不在里面；spec 的 `icon=` 只设置 exe 文件图标，gui.py 从没设过**窗口**标题栏图标（一直是 Tk 默认羽毛）。
+- **改动**：① `tools/gui.py`：加 `ICON_FILE`（源码态=tools/icon.ico；onefile exe 态=PyInstaller `_MEIPASS` 解包目录）+ `root.iconbitmap`；② `木偶鱼工具.spec`：`datas` 打入 icon.ico（**spec 被 .gitignore 忽略，此改动只在本地磁盘，重新打包时仍生效**）；③ **真 bug 修复**：exe 模式下 `EXE_DIR/.venv` 不存在时代码回退成"拿 exe 自己当 python 解释器"，所有按钮必挂（用户点 TG下载 失败返回码 1 即此因）——改为再向上一级找 `dist/../.venv`（exe 在 repo dist/ 内时命中）。
+- **重新打包**：PyInstaller 6.20.0（PATH），`pyinstaller --noconfirm 木偶鱼工具.spec`，新 exe 14:24 入 dist/ 并随 git 提交（exe 本身在 git 跟踪）。
+- **验证**：启动新 exe 实拍确认：标题栏图标=木偶鱼 logo ✓、三按钮渲染 ✓；「按钮点击→子进程」这一环未实测完（用户正在用电脑，前台被 QQ/Edge 占用，CUA 点击/键盘注入抢不到焦点），但按钮要跑的命令 `[repo\.venv\python.exe, tools\jandan\jandan_scraper.py, --console-info]` 已在 venv 命令行原样跑通（14:09），解析逻辑逐级核对过。**用户点一下煎蛋下载即最终验收**。
+- **提交**：见 git log（fix(tools) GUI 重打包+图标+venv查找）。
+
 ## 2026-09-14 GUI 第一行改三按钮：TG下载 / 煎蛋下载 / 统一上传（全部手动触发）
 
 - **需求**：用户要在 GUI 里自己控制触发——第一行「开始下载/开始上传」改成三按钮：⬇TG下载（原 tdl 链不变）、🥚煎蛋下载（新）、⬆统一上传（原 uploader，扫全部 watch_folders 故名统一）。

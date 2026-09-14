@@ -23,8 +23,16 @@ else:
     EXE_DIR = Path(__file__).parent.parent    # 项目根目录
 
 VENV_PYTHON = EXE_DIR / ".venv" / "Scripts" / "python.exe"
+if not VENV_PYTHON.exists() and getattr(sys, 'frozen', False):
+    # exe 放在 repo 的 dist/ 里时，.venv 在上一级；否则会退化成"拿 exe 当解释器"必然失败
+    VENV_PYTHON = EXE_DIR.parent / ".venv" / "Scripts" / "python.exe"
 if not VENV_PYTHON.exists():
     VENV_PYTHON = Path(sys.executable)
+
+# 窗口标题栏图标：源码态用 repo 内 tools/icon.ico；onefile exe 态用 PyInstaller 解包目录里那份
+ICON_FILE = EXE_DIR / "tools" / "icon.ico"
+if not ICON_FILE.exists() and getattr(sys, 'frozen', False):
+    ICON_FILE = Path(getattr(sys, "_MEIPASS", "")) / "icon.ico"
 
 DOWNLOAD_DIR = r"C:\Users\w\Downloads\tdl"
 DOWNLOADER_SCRIPT = EXE_DIR / "tools" / "tdl_downloader" / "tdl_downloader_v2.py"
@@ -110,6 +118,11 @@ class App:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("木偶鱼 - 下载/上传工具")
+        if ICON_FILE.exists():
+            try:
+                self.root.iconbitmap(str(ICON_FILE))
+            except Exception:
+                pass  # 图标加载失败不挡主流程（顶多退回默认图标）
         self.root.geometry("1000x620")
         self.root.minsize(800, 480)
 
