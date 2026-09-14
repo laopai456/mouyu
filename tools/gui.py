@@ -22,25 +22,32 @@ if getattr(sys, 'frozen', False):
 else:
     EXE_DIR = Path(__file__).parent.parent    # 项目根目录
 
-VENV_PYTHON = EXE_DIR / ".venv" / "Scripts" / "python.exe"
+# exe 放在 repo 的 dist\ 里时，.venv 和 tools\ 都在上一级（repo 根）
+if (EXE_DIR / "tools").exists():
+    BASE_DIR = EXE_DIR
+elif (EXE_DIR.parent / "tools").exists():
+    BASE_DIR = EXE_DIR.parent
+else:
+    BASE_DIR = EXE_DIR
+
+VENV_PYTHON = BASE_DIR / ".venv" / "Scripts" / "python.exe"
 if not VENV_PYTHON.exists() and getattr(sys, 'frozen', False):
-    # exe 放在 repo 的 dist/ 里时，.venv 在上一级；否则会退化成"拿 exe 当解释器"必然失败
-    VENV_PYTHON = EXE_DIR.parent / ".venv" / "Scripts" / "python.exe"
+    VENV_PYTHON = EXE_DIR / ".venv" / "Scripts" / "python.exe"
 if not VENV_PYTHON.exists():
     VENV_PYTHON = Path(sys.executable)
 
 # 窗口标题栏图标：源码态用 repo 内 tools/icon.ico；onefile exe 态用 PyInstaller 解包目录里那份
-ICON_FILE = EXE_DIR / "tools" / "icon.ico"
+ICON_FILE = BASE_DIR / "tools" / "icon.ico"
 if not ICON_FILE.exists() and getattr(sys, 'frozen', False):
     ICON_FILE = Path(getattr(sys, "_MEIPASS", "")) / "icon.ico"
 
 DOWNLOAD_DIR = r"C:\Users\w\Downloads\tdl"
-DOWNLOADER_SCRIPT = EXE_DIR / "tools" / "tdl_downloader" / "tdl_downloader_v2.py"
-UPLOADER_SCRIPT = EXE_DIR / "tools" / "uploader" / "uploader.py"
-JANDAN_SCRIPT = EXE_DIR / "tools" / "jandan" / "jandan_scraper.py"
-UPLOADER_CACHE = EXE_DIR / "tools" / "uploader" / "cache" / "md5_cache.json"
-DOWNLOADER_CACHE = EXE_DIR / "tools" / "tdl_downloader" / "cache" / "md5_cache.json"
-DOWNLOADER_PROGRESS = EXE_DIR / "tools" / "tdl_downloader" / "cache" / "progress_cache.json"
+DOWNLOADER_SCRIPT = BASE_DIR / "tools" / "tdl_downloader" / "tdl_downloader_v2.py"
+UPLOADER_SCRIPT = BASE_DIR / "tools" / "uploader" / "uploader.py"
+JANDAN_SCRIPT = BASE_DIR / "tools" / "jandan" / "jandan_scraper.py"
+UPLOADER_CACHE = BASE_DIR / "tools" / "uploader" / "cache" / "md5_cache.json"
+DOWNLOADER_CACHE = BASE_DIR / "tools" / "tdl_downloader" / "cache" / "md5_cache.json"
+DOWNLOADER_PROGRESS = BASE_DIR / "tools" / "tdl_downloader" / "cache" / "progress_cache.json"
 
 # ── QQ 机器人（qqbot 仓库）控制 ──
 QQBOT_DIR = Path(r"C:\Users\w\Documents\GitHub\qqbot")
@@ -215,6 +222,12 @@ class App:
             state=tk.DISABLED,
         )
         self.botlog.pack(fill=tk.BOTH, expand=True)
+
+        # 启动自检：解释器/脚本目录解析结果打进日志，路径错了第一时间可见
+        self.log_write(f"解释器: {VENV_PYTHON}\n")
+        self.log_write(f"脚本目录: {BASE_DIR / 'tools'}\n")
+        if getattr(sys, 'frozen', False) and VENV_PYTHON == Path(sys.executable):
+            self.log_write("ERROR 未找到 .venv 解释器（回退到 exe 自身），下载/上传按钮将无法运行！\n")
 
         # 刷新计数
         self.refresh_counts()

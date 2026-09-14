@@ -2,6 +2,13 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-14 GUI 路径解析彻底修：BASE_DIR 向上探查 + 启动自检日志（用户报 Python312 找不到脚本）
+
+- **用户报错**：`Python312\python.exe: can't open file '...\dist\tools\tdl_downloader\tdl_downloader_v2.py'`——解释器错（系统 Python）+ 脚本路径错（dist\tools 不存在），根因同一：exe 在 dist\ 里时 `.venv` 和 `tools\` 都在上一级，此前只修了 venv 一处、脚本路径仍按 `EXE_DIR\tools` 找。
+- **改动**（`tools/gui.py`）：① 新增 `BASE_DIR` 探查：`EXE_DIR\tools` 存在用之，否则 `EXE_DIR.parent\tools`（exe 在 repo dist\ 内时命中 repo 根）；全部脚本/缓存路径从 `EXE_DIR` 改挂 `BASE_DIR`；VENV 查找挂 `BASE_DIR\.venv`（保留 EXE_DIR 二级回退）。② **启动自检**：GUI 起来就把「解释器」「脚本目录」解析结果打进工具日志，若 frozen 态回退到 exe 自身则打 ERROR 行——路径问题以后一眼可见，不用再猜 rc1。
+- **验证**：14:34 重建（先 taskkill 占用的两个实例，其一为用户自己开的），启动实拍：自检行显示 `解释器=...\mouyu\.venv\Scripts\python.exe`、`脚本目录=...\mouyu\tools`，全对；标题栏图标/三按钮/计数（已上传 19565）正常。按钮点击链路留用户验收（窗口已留在桌面）。
+- **提交**：见 git log（fix(tools) GUI 路径解析）。
+
 ## 2026-09-14 GUI 重新打包：标题栏图标修复 + exe 模式 venv 查找真 bug（用户点 TG下载失败暴露）
 
 - **背景**：用户提醒"工具没重新编译+标题栏图标不对"。exe 是 9/6 打包的，本轮所有改动（三按钮/煎蛋入口）都不在里面；spec 的 `icon=` 只设置 exe 文件图标，gui.py 从没设过**窗口**标题栏图标（一直是 Tk 默认羽毛）。
