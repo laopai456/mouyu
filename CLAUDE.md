@@ -21,6 +21,7 @@
 - **云数据库 where() 链式 bug**：多条件 where 可能丢条件 → 改用内存过滤（先 where status，再 filter reviewTime）。
 - **autoCleanup**：满 2000 张删 200 张，优先删 status=2，不够再删 status=0，按 createTime 倒序。
 - **monthlyCleanup**：每月3号凌晨3点删「上上个月」及更早（`yearMonth <= 当前月-2` 累积式，保留当前月+上个月），**豁免 status=3 转发群组**（qqbot 滴灌池）；真删需 ADMIN_OPENIDS 白名单（缺省空=拒绝，fail-safe），`dryRun` 只统计不删、免白名单。
+- **weeklyGroupCleanup**：每周一凌晨3点清转发群组图（仅 status=3）：删 `createTime` 早于上周周一 00:00（北京时间）的，累积式=「上上周」及更早，保留当前周+上周；白名单/dryRun 规则同 monthlyCleanup。腾讯 cron 星期域 **0=周日、1=周一**（`0 0 3 * * 1 *`），别按 Quartz 的 1=周日 写。
 - **代码包排除**：`tools/ docs/ admin/ .trae/ *.py *.md .venv/` 不进小程序包（~300KB）。
 
 ## 字段（images 表关键字段）

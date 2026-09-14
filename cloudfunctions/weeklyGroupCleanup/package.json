@@ -1,0 +1,20 @@
+{
+  "name": "weeklyGroupCleanup",
+  "version": "1.0.0",
+  "description": "每周一凌晨3点清理转发群组素材中上上周及更早的图（仅 status=3，qqbot 滴灌池）",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  },
+  "cloudfunction-config": {
+    "memorySize": 256,
+    "timeout": 60
+  },
+  "triggers": [
+    {
+      "name": "weeklyGroupCleanupTrigger",
+      "type": "timer",
+      "config": "0 0 3 * * 1 *"
+    }
+  ]
+}

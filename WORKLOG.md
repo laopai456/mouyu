@@ -2,6 +2,18 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-14 新云函数 weeklyGroupCleanup：转发群组图每周一自动清上上周及更早
+
+- **需求**：status=3 转发群组素材（qqbot 滴灌池）每周一自动清理一次，删「上上周」的。
+- **实现**（新建 `cloudfunctions/weeklyGroupCleanup/`，照 monthlyCleanup 模式）：
+  - 定时触发 `0 0 3 * * 1 *` 每周一凌晨3点（腾讯 cron 星期域 **0=周日、1=周一**，查官方文档确认，与 Quartz 的 1=周日 相反）；年域必填共 7 域。
+  - 删 `createTime` 早于**上周周一 00:00（北京时间）**的 status=3 图，累积式=「上上周」及更早，保留当前周+上周（与 monthly KEEP_MONTHS=2 口径一致），漏跑下周一自动补上；云存储文件一并删。
+  - 避开多条件 where 丢条件的坑：只下推单条件 `where({status:3})`，createTime 内存过滤；主循环 **createTime 升序**取批——最老的排最前删完即前进，保留窗口内的新图沉底自然终止（monthlyCleanup 的取批没排序，豁免池>100 条时会空转到超时，本次没动它，仅留意）。
+  - 白名单/dryRun/软超时/failedIds 防打转/存储批量删全部同 monthly 模式；日志关键词 `[WEEKLY_GROUP_CLEAN]`。
+- **改动文件**：`cloudfunctions/weeklyGroupCleanup/{index.js,package.json}`（新增）；`README.md`（函数表+清理规则+部署清单+触发器+环境变量表 5 处）；`CLAUDE.md`（关键约定加 weeklyGroupCleanup 条目，AGENTS.md 是其软链）。
+- **验证**：node --check 过；cutoff 函数 5 组日期单测全过（今天周一→09-07、周三/周日/下周一、2026 跨年边界）；cutoff 含北京时间偏移处理。**云端未跑**——需 DevTools 部署后 dryRun 实测。
+- **下一步（需用户操作）**：DevTools 中右键 `weeklyGroupCleanup` →「上传并部署：云端安装依赖」，再右键 →「上传触发器」；然后控制台传 `{"dryRun": true}` 验证统计（免白名单）。若要手动真删/复用 monthly 的白名单，给该函数也配 `ADMIN_OPENIDS` 环境变量（不配只影响手动真删，定时触发不受影响）。
+
 ## 2026-09-14 煎蛋日报拿到全量：from=weixin 解锁分页（top10 → 50+/天）
 
 - **用户反馈**：每天只有 10 来张太少，日报实际有 50+ 条。
