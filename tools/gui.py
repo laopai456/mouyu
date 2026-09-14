@@ -42,6 +42,7 @@ if not ICON_FILE.exists() and getattr(sys, 'frozen', False):
     ICON_FILE = Path(getattr(sys, "_MEIPASS", "")) / "icon.ico"
 
 DOWNLOAD_DIR = r"C:\Users\w\Downloads\tdl"
+JANDAN_DOWNLOAD_DIR = r"C:\Users\w\Downloads\jandan"
 DOWNLOADER_SCRIPT = BASE_DIR / "tools" / "tdl_downloader" / "tdl_downloader_v2.py"
 UPLOADER_SCRIPT = BASE_DIR / "tools" / "uploader" / "uploader.py"
 JANDAN_SCRIPT = BASE_DIR / "tools" / "jandan" / "jandan_scraper.py"
@@ -101,12 +102,16 @@ process_lock = threading.Lock()
 # ── 计数 ──
 
 def get_download_count() -> int:
-    if not os.path.exists(DOWNLOAD_DIR):
-        return 0
-    return sum(
-        1 for f in os.scandir(DOWNLOAD_DIR)
-        if f.is_file() and f.name.split(".")[-1].lower() in INCLUDE_TYPES
-    )
+    # TG（tdl）和煎蛋两个下载文件夹都算上
+    total = 0
+    for d in (DOWNLOAD_DIR, JANDAN_DOWNLOAD_DIR):
+        if not os.path.exists(d):
+            continue
+        total += sum(
+            1 for f in os.scandir(d)
+            if f.is_file() and f.name.split(".")[-1].lower() in INCLUDE_TYPES
+        )
+    return total
 
 
 def get_upload_count() -> int:

@@ -2,6 +2,13 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-14 煎蛋下载全链路验收通过 + 「已下载」计数器补上 jandan 文件夹
+
+- **用户实测通过**：GUI 点「🥚 煎蛋下载」完整跑通——启动等待 18s → 昨日（2026-09-13）日报 p1 50 条 → 逐张下载 5~12s 间隔、中途自动休息 → 图片数达上限 50 停（候选 52），`JANDAN_RUN_END`，图落 `C:\Users\w\Downloads\jandan`（50 张）。仿人节奏实测符合设计，无 429/5xx。
+- **用户报「下载数是 0」**：根因是 GUI「已下载」计数器只扫 TG 文件夹（`Downloads\tdl`），煎蛋图在 `Downloads\jandan` 没被算。改 `get_download_count()` 把两个文件夹都计入（`tools/gui.py`）。
+- **验证**：重建 exe（dist 旧 exe 句柄已释放，直接覆盖编译成功），启动实拍「已下载： 50」「已上传： 19662」，自检行解释器/脚本目录正常，图标/按钮正常。
+- **提交**：见 git log（fix(tools) 已下载计数含 jandan）。
+
 ## 2026-09-14 GUI 路径解析彻底修：BASE_DIR 向上探查 + 启动自检日志（用户报 Python312 找不到脚本）
 
 - **用户报错**：`Python312\python.exe: can't open file '...\dist\tools\tdl_downloader\tdl_downloader_v2.py'`——解释器错（系统 Python）+ 脚本路径错（dist\tools 不存在），根因同一：exe 在 dist\ 里时 `.venv` 和 `tools\` 都在上一级，此前只修了 venv 一处、脚本路径仍按 `EXE_DIR\tools` 找。
