@@ -3,9 +3,11 @@
 煎蛋无聊图日报抓取器（慢速拟人版）
 
 数据源（前端 SPA 同款接口，无需登录）：
-  1. GET /api/v1/daily-hot/reports?page=1&page_size=50   → 日报日期列表（近 ~40 天）
-  2. GET /api/v1/daily-hot/comments?date=YYYY-MM-DD&sort=vote_desc&page=N&page_size=20
-     → 当日热门吐槽，content 字段内嵌 <img src="...">，图床为 img.toto.im / img.wangmoyu.com 等
+  1. GET /api/v1/daily-hot/reports?page=1&page_size=50   → 日报日期列表
+  2. GET /api/v1/daily-hot/comments?date=YYYY-MM-DD&sort=vote_desc&page=N&page_size=50&from=weixin
+     → 当日热门吐槽，content 字段内嵌 <img src>，图床为 img.toto.im / img.wangmoyu.com 等
+     注：未登录只有「微信来源(from=weixin) + 昨天日报」能拿全量分页（~50 条/天），
+     其余日期无论怎么传参都只有赞数 top10——最新一份日报永远是"昨天"，正好全量覆盖。
 
 拟人策略（默认参数刻意保守，慢是特性不是缺陷）：
   - 整轮固定一个真实 Chrome UA + 完整浏览器头（API 仿 axios，图片仿 <img> 加载）
@@ -15,7 +17,7 @@
   - 429/5xx 指数退避重试，连续失败即整轮收手装死，下轮再续
   - 图片连续失败达阈值即熔断装死（疑似被图床限流时立即收手）
   - 目标文件已存在则幂等跳过（增量状态丢失也不会重复下载）
-  - 每轮滴灌式上限（默认 30 图 / 25 个 API 页），跑完静默退出，增量状态记在 cache/state.json
+  - 每轮滴灌式上限（默认 50 图 / 10 个 API 页），跑完静默退出，增量状态记在 cache/state.json
 
 产物落盘到 save_dir（默认 C:\\Users\\w\\Downloads\\jandan），由 uploader 的 watch_folders
 接力上传 COS（uploader 侧还有 md5 去重兜底）。
@@ -63,10 +65,10 @@ DEFAULT_CONFIG = {
     "rest_every_range": [8, 14],       # 每随机 N 个请求歇一会儿
     "rest_range": [60, 180],           # 长歇时长（秒）
     "start_jitter_range": [10, 70],    # 启动前随机等待（秒）
-    "max_images_per_run": 30,          # 每轮最多下载图片数（滴灌上限）
-    "max_api_pages_per_run": 25,       # 每轮最多翻的 API 页数
+    "max_images_per_run": 50,          # 每轮最多下载图片数（滴灌上限；一天全量约 45-50 张，一轮收完）
+    "max_api_pages_per_run": 10,       # 每轮最多翻的 API 页数（weixin 全量态每日期仅 1-2 页）
     "min_vote_positive": 0,            # 吐槽最低赞数过滤（0=不限，日报本身已按热度排序）
-    "page_size": 10,                   # 接口实测固定返回赞数 top10（page/page_size 参数被忽略，疑似 CDN 缓存键不含分页）
+    "page_size": 50,                   # 仿前端 pageSize=50；须配 from=weixin 才拿得到全量（服务端只对微信来源+昨天放行分页，其余只有赞数 top10）
     "max_consecutive_img_fail": 5,     # 图片连续失败 N 次即熔断装死（疑似被限流时立即收手）
     "backfill_days": 2,                # 只处理最新 N 天日报（默认 2：昨天+今天；旧的无时效性不回溯）
     "connect_timeout": 10,
@@ -212,6 +214,9 @@ class JandanScraper:
         r = self._get(COMMENTS_URL, params={
             "date": date, "sort": "vote_desc", "page": page,
             "page_size": self.cfg["page_size"],
+            # 未登录时服务端仅对「微信来源的昨天日报」放行全量分页（对齐前端 isWeixinYesterday 逻辑）；
+            # 其余日期带了也只回 top10，无副作用
+            "from": "weixin",
         }, headers={
             "Accept": "application/json, text/plain, */*",
             "Referer": f"{PAGE_URL}/date/{date}",
