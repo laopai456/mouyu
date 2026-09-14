@@ -85,6 +85,22 @@ class ImageUploader:
         self.md5_cache_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.md5_cache_file, 'w', encoding='utf-8') as f:
             json.dump(self.md5_cache, f, ensure_ascii=False, indent=2)
+
+    def purge_old_cache_entries(self):
+        """每月清理台账：只保留本月上传记录，上个月及更早在每次运行开始时清掉。
+
+        台账只用于本地防重复上传（delete_after_upload=true，本地文件不留存），
+        清掉后即使旧图重新出现，也有服务端 checkMd5 + DB 查重兜底，不会重复入库。
+        """
+        now_prefix = datetime.now().strftime('%Y-%m')
+        old = [md5 for md5, info in self.md5_cache.items()
+               if not isinstance(info, dict) or str(info.get('upload_time', ''))[:7] != now_prefix]
+        if not old:
+            return
+        for md5 in old:
+            del self.md5_cache[md5]
+        self.save_md5_cache()
+        self.logger.warning(f"UPLOAD_CACHE_PURGE 清理上月及更早台账 {len(old)} 条，保留本月 {len(self.md5_cache)} 条")
     
     def is_image(self, file_path):
         ext = Path(file_path).suffix.lower().lstrip('.')
@@ -368,6 +384,7 @@ def main():
     print()
     
     event_handler = ImageUploader(config)
+    event_handler.purge_old_cache_entries()
     
     has_valid_folder = False
     for folder in config['watch_folders']:
