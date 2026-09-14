@@ -37,7 +37,11 @@ import random
 import re
 import sys
 import time
+import warnings
 from pathlib import Path
+
+# venv 里 requests 启动自检的提示性告警（urllib3 版本不匹配），不影响功能，别污染 GUI 日志
+warnings.filterwarnings("ignore", message=".*doesn't match a supported version.*")
 
 import requests
 
@@ -80,15 +84,15 @@ DEFAULT_CONFIG = {
 LOGGER = logging.getLogger("jandan")
 
 
-def setup_logging(log_dir: Path) -> None:
+def setup_logging(log_dir: Path, console_info: bool = False) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
     fh = logging.FileHandler(log_dir / "jandan.log", encoding="utf-8")
     fh.setLevel(logging.INFO)
     fh.setFormatter(fmt)
-    # 控制台只出告警/错误 + 结尾汇总，逐张明细全在日志文件（与 uploader 一致）
+    # 控制台默认只出告警/错误 + 结尾汇总；--console-info（GUI 按钮运行）时输出全部进度
     sh = logging.StreamHandler(sys.stdout)
-    sh.setLevel(logging.WARNING)
+    sh.setLevel(logging.INFO if console_info else logging.WARNING)
     sh.setFormatter(fmt)
     LOGGER.addHandler(fh)
     LOGGER.addHandler(sh)
@@ -395,11 +399,13 @@ def main() -> int:
     ap.add_argument("--save-dir", help="图片保存目录（默认取配置）")
     ap.add_argument("--delay-scale", type=float, default=1.0,
                     help="所有延迟等比缩放，仅测试用（0.2=五分之一速）")
+    ap.add_argument("--console-info", action="store_true",
+                    help="控制台输出 INFO 级逐请求进度（GUI 按钮运行时用；默认只有告警/汇总）")
     ap.add_argument("--dry-run", action="store_true", help="只列候选图片不落盘")
     args = ap.parse_args()
 
     base_dir = Path(__file__).parent
-    setup_logging(base_dir / "logs")
+    setup_logging(base_dir / "logs", console_info=args.console_info)
     cfg = load_config(base_dir)
     for k, a in (("max_images_per_run", args.max_images), ("max_api_pages_per_run", args.max_pages),
                  ("backfill_days", args.backfill_days), ("min_vote_positive", args.min_votes),

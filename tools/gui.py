@@ -29,6 +29,7 @@ if not VENV_PYTHON.exists():
 DOWNLOAD_DIR = r"C:\Users\w\Downloads\tdl"
 DOWNLOADER_SCRIPT = EXE_DIR / "tools" / "tdl_downloader" / "tdl_downloader_v2.py"
 UPLOADER_SCRIPT = EXE_DIR / "tools" / "uploader" / "uploader.py"
+JANDAN_SCRIPT = EXE_DIR / "tools" / "jandan" / "jandan_scraper.py"
 UPLOADER_CACHE = EXE_DIR / "tools" / "uploader" / "cache" / "md5_cache.json"
 DOWNLOADER_CACHE = EXE_DIR / "tools" / "tdl_downloader" / "cache" / "md5_cache.json"
 DOWNLOADER_PROGRESS = EXE_DIR / "tools" / "tdl_downloader" / "cache" / "progress_cache.json"
@@ -112,7 +113,7 @@ class App:
         self.root.geometry("1000x620")
         self.root.minsize(800, 480)
 
-        # 当前运行状态: None | "download" | "upload"
+        # 当前运行状态: None | "download" | "jandan" | "upload"
         self.current_action: str | None = None
         # 机器人按钮互斥（启/停/清理 同时只允许一个在跑）
         self._bot_busy = False
@@ -137,10 +138,13 @@ class App:
         btn_frame = ttk.Frame(self.root, padding=(12, 0, 12, 6))
         btn_frame.pack(fill=tk.X)
 
-        self.dl_btn = ttk.Button(btn_frame, text="⬇ 开始下载", command=lambda: self.toggle_action("download"), width=16)
+        self.dl_btn = ttk.Button(btn_frame, text="⬇ TG下载", command=lambda: self.toggle_action("download"), width=14)
         self.dl_btn.pack(side=tk.LEFT, padx=(0, 10))
 
-        self.ul_btn = ttk.Button(btn_frame, text="⬆ 开始上传", command=lambda: self.toggle_action("upload"), width=16)
+        self.jd_btn = ttk.Button(btn_frame, text="🥚 煎蛋下载", command=lambda: self.toggle_action("jandan"), width=14)
+        self.jd_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.ul_btn = ttk.Button(btn_frame, text="⬆ 统一上传", command=lambda: self.toggle_action("upload"), width=14)
         self.ul_btn.pack(side=tk.LEFT, padx=(0, 20))
 
         # 清理缓存复选框
@@ -482,6 +486,8 @@ class App:
             # 空闲 → 启动
             if action == "download":
                 self.start_download()
+            elif action == "jandan":
+                self.start_jandan()
             else:
                 self.start_upload()
 
@@ -506,12 +512,17 @@ class App:
                     pass
                 running_process = None
 
+    def _set_action_buttons(self, running: str | None):
+        """统一设置三个动作按钮文案/状态：running 项显示「停止」，其余恢复可用"""
+        texts = {"download": "⬇ TG下载", "jandan": "🥚 煎蛋下载", "upload": "⬆ 统一上传"}
+        for key, btn in (("download", self.dl_btn), ("jandan", self.jd_btn), ("upload", self.ul_btn)):
+            btn.config(text="⏹ 停止" if running == key else texts[key], state=tk.NORMAL)
+
     def stop_process(self):
         self._kill_tree()
         self.log_write("\n⏹ 已手动停止\n")
         self.current_action = None
-        self.dl_btn.config(text="⬇ 开始下载", state=tk.NORMAL)
-        self.ul_btn.config(text="⬆ 开始上传", state=tk.NORMAL)
+        self._set_action_buttons(None)
 
     # ── 运行子进程 ──
 
@@ -522,12 +533,13 @@ class App:
         self.log_write(f"{' '.join(cmd)}\n")
         self.log_write(f"{'=' * 50}\n")
 
-        # 切换按钮状态
+        # 切换按钮状态：当前项变「停止」，其余禁用（同时只跑一个）
         self.current_action = action
-        btn = self.dl_btn if action == "download" else self.ul_btn
-        other_btn = self.ul_btn if action == "download" else self.dl_btn
-        btn.config(text="⏹ 停止", state=tk.NORMAL)
-        other_btn.config(state=tk.DISABLED)
+        for key, btn in (("download", self.dl_btn), ("jandan", self.jd_btn), ("upload", self.ul_btn)):
+            if key == action:
+                btn.config(text="⏹ 停止", state=tk.NORMAL)
+            else:
+                btn.config(state=tk.DISABLED)
 
         def worker():
             global running_process
@@ -572,8 +584,7 @@ class App:
 
     def set_buttons_idle(self):
         self.current_action = None
-        self.dl_btn.config(text="⬇ 开始下载", state=tk.NORMAL)
-        self.ul_btn.config(text="⬆ 开始上传", state=tk.NORMAL)
+        self._set_action_buttons(None)
         self.root.after(0, self.refresh_counts)
 
     # ── 下载 ──
@@ -586,6 +597,13 @@ class App:
                     self.log_write(f"已清理: {f.name}\n")
         cmd = [str(VENV_PYTHON), str(DOWNLOADER_SCRIPT), "--auto"]
         self.run_subprocess(cmd, "下载图片", "download")
+
+    # ── 煎蛋下载 ──
+
+    def start_jandan(self):
+        # --console-info：煎蛋脚本的逐请求进度进 GUI 日志（默认控制台只出告警/汇总）
+        cmd = [str(VENV_PYTHON), str(JANDAN_SCRIPT), "--console-info"]
+        self.run_subprocess(cmd, "煎蛋下载", "jandan")
 
     # ── 上传 ──
 
