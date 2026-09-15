@@ -2,6 +2,14 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-15 修「打开审核」回退托管版——ADMIN_DIR 漏挂 BASE_DIR（2026-09-14 BASE_DIR 重构漏网之鱼）
+
+- **现象**（用户截图）：点「🔍 打开审核」日志连出 `WARN 本地admin.html不存在，回退打开托管版`，但 `admin/admin.html` 明明在仓库里。
+- **根因**：`ADMIN_DIR = EXE_DIR / "admin"`——exe 住进 `dist\` 后 EXE_DIR=dist，去 `dist\admin\` 找当然没有。9月6日 exe 还在仓库根时此路径碰巧正确，BASE_DIR 重构（8b234a7）时脚本/缓存路径全改挂 BASE_DIR，唯独 ADMIN_DIR 漏了。
+- **修复**（`tools/gui.py` 69 行）：`ADMIN_DIR = BASE_DIR / "admin"`；grep 确认全文件再无其他该迁未迁的 EXE_DIR（35 行 venv 二级回退是刻意保留）。
+- **验证**：重编译后启动，a11y 点击「打开审核」→ 日志出 `INFO 本地审核服务已启动 http://localhost:9000/admin.html`（无 WARN），curl 本地 admin HTTP 200，浏览器正常打开本地审核页。
+- **提交**：见 git log（fix(tools) ADMIN_DIR 挂回 BASE_DIR）。
+
 ## 2026-09-14 排查「工具为什么还原了」——桌面快捷方式指向根目录 9月6日旧 exe
 
 - **现象**：用户双击桌面快捷方式，看到的工具是旧版（无煎蛋按钮等），疑似"还原"。
