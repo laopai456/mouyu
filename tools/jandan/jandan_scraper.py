@@ -69,7 +69,7 @@ DEFAULT_CONFIG = {
     "rest_every_range": [15, 25],      # 每随机 N 个请求歇一会儿
     "rest_range": [30, 90],            # 长歇时长（秒）
     "start_jitter_range": [10, 70],    # 启动前随机等待（秒）
-    "max_images_per_run": 50,          # 每轮最多下载图片数（滴灌上限；一天全量约 45-50 张，一轮收完）
+    "max_images_per_run": 300,         # 单轮图片安全上限，0=不限制（有多少下多少）；两天窗口实际全量约100-120张，此值只兜底异常跑不完的情况
     "max_api_pages_per_run": 10,       # 每轮最多翻的 API 页数（weixin 全量态每日期仅 1-2 页）
     "min_vote_positive": 0,            # 吐槽最低赞数过滤（0=不限，日报本身已按热度排序）
     "page_size": 50,                   # 仿前端 pageSize=50；须配 from=weixin 才拿得到全量（服务端只对微信来源+昨天放行分页，其余只有赞数 top10）
@@ -358,7 +358,7 @@ class JandanScraper:
                     candidates += len(urls)
                     ok_all = True
                     for i, u in enumerate(urls, 1):
-                        if self.downloaded >= self.cfg["max_images_per_run"]:
+                        if self.cfg["max_images_per_run"] and self.downloaded >= self.cfg["max_images_per_run"]:
                             self.stop_reason = f"图片数达上限{self.cfg['max_images_per_run']}"
                             LOGGER.info("JANDAN_CAP_REACHED %s", self.stop_reason)
                             ok_all = False
