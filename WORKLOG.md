@@ -2,6 +2,13 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-16 煎蛋 GUI 日志降噪——控制台只出阶段/每10张进度，逐张明细只进文件
+
+- **用户反馈**：GUI 日志逐张刷 `IMG_OK + PACE_WAIT` 两行/张，全量跑一次刷两百行，冗余太多。
+- **改动**：① `jandan_scraper.py`——控制台 handler 挂 `_ConsolePhaseFilter`（WARNING+ 一律放行；INFO 按 `CONSOLE_PHASE_KEYWORDS` 白名单放行：RUN_START/END、REPORTS_OK、DATE_START/DONE、PAGE_OK/DUP、PROGRESS、CAP_REACHED、ABORT、CONFIG_*），并新增每下载满 10 张打一条 `JANDAN_PROGRESS 本轮已下载N张`；`--console-info` 语义改为"排障全量输出"。② `gui.py`——`start_jandan()` 去掉 `--console-info`。
+- **验证**：真实短跑（窗口已基本抓完，下载0张）控制台全 run 仅 11 行（阶段+1条死图 WARNING+RUN_END 汇总），文件侧行数不变（680 行历史明细仍在）；白名单外的逐张行确认不再出现在控制台。本次 run `已完成天数2`——放开上限后两天日报首次完整跑完（09-15 p2 35 条此前被旧上限截停从未翻到）。另确认：非昨日日报 API 恒返 top10（09-14 p1 仅 10 条，PAGE_DUP 干净停翻），属煎蛋服务端门禁，非我方回归。
+- **提交**：见 git log（feat(tools) 煎蛋 GUI 日志降噪）。
+
 ## 2026-09-15 煎蛋抓取放开 50 上限——「有多少下多少」（用户确认不该人为限量）
 
 - **用户问**：每天正好 50 还是限了 50？核实：是限的——`max_images_per_run=50` 触顶截停。实测 09-13 候选 52 张（p1 50条+p2 2条）、09-14 仅 p1 就 52 张（多图评论），每天都被截 2~5 张，且窗口只有 2 天、配额先被最新一天吃满 → 前一天尾巴永久漏掉。

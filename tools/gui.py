@@ -632,8 +632,8 @@ class App:
     # ── 煎蛋下载 ──
 
     def start_jandan(self):
-        # --console-info：煎蛋脚本的逐请求进度进 GUI 日志（默认控制台只出告警/汇总）
-        cmd = [str(VENV_PYTHON), str(JANDAN_SCRIPT), "--console-info"]
+        # 不带 --console-info：GUI 只出阶段/每10张进度/告警，逐张明细在 tools/jandan/logs/jandan.log
+        cmd = [str(VENV_PYTHON), str(JANDAN_SCRIPT)]
         self.run_subprocess(cmd, "煎蛋下载", "jandan")
 
     # ── 上传 ──

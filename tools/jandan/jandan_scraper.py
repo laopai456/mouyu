@@ -84,16 +84,38 @@ DEFAULT_CONFIG = {
 LOGGER = logging.getLogger("jandan")
 
 
+# 控制台白名单：阶段/进度/收尾行。逐张明细（IMG_OK/IMG_SKIP/IMG_HAVE/PACE_WAIT）只进文件不进控制台
+CONSOLE_PHASE_KEYWORDS = (
+    "JANDAN_RUN_START", "JANDAN_RUN_END", "JANDAN_REPORTS_OK",
+    "JANDAN_DATE_START", "JANDAN_DATE_DONE", "JANDAN_PAGE_OK", "JANDAN_PAGE_DUP",
+    "JANDAN_PROGRESS", "JANDAN_CAP_REACHED", "JANDAN_ABORT",
+    "JANDAN_CONFIG_LOADED", "JANDAN_CONFIG_BAD",
+)
+
+
+class _ConsolePhaseFilter(logging.Filter):
+    """WARNING+ 一律放行；INFO 按 CONSOLE_PHASE_KEYWORDS 白名单放行"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno >= logging.WARNING:
+            return True
+        msg = record.getMessage()
+        return any(k in msg for k in CONSOLE_PHASE_KEYWORDS)
+
+
 def setup_logging(log_dir: Path, console_info: bool = False) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
     fh = logging.FileHandler(log_dir / "jandan.log", encoding="utf-8")
     fh.setLevel(logging.INFO)
     fh.setFormatter(fmt)
-    # 控制台默认只出告警/错误 + 结尾汇总；--console-info（GUI 按钮运行）时输出全部进度
+    # 控制台：WARNING+（失败/退避/熔断）全出；INFO 只出白名单阶段行，GUI 日志不刷屏。
+    # --console-info 才放全量逐张明细（排障用）
     sh = logging.StreamHandler(sys.stdout)
-    sh.setLevel(logging.INFO if console_info else logging.WARNING)
+    sh.setLevel(logging.INFO)
     sh.setFormatter(fmt)
+    if not console_info:
+        sh.addFilter(_ConsolePhaseFilter())
     LOGGER.addHandler(fh)
     LOGGER.addHandler(sh)
     LOGGER.setLevel(logging.INFO)
@@ -300,6 +322,8 @@ class JandanScraper:
         self.downloaded += 1
         self.img_fail_streak = 0
         LOGGER.info("JANDAN_IMG_OK id=%s %dB %s", comment_id, size, path.name)
+        if self.downloaded % 10 == 0:
+            LOGGER.info("JANDAN_PROGRESS 本轮已下载%d张", self.downloaded)
         return True
 
     # ---------- 主流程 ----------
