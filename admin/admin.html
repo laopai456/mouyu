@@ -85,6 +85,21 @@
       top: 45%;
       left: 50%;
       transform: translate(-50%, -50%);
+      cursor: grab;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+    .modal-content.dragging {
+      cursor: grabbing;
+    }
+    .modal-hint {
+      position: absolute;
+      bottom: 46px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.55);
+      font-size: 12px;
+      pointer-events: none;
     }
     .modal-close {
       position: absolute;
@@ -355,6 +370,7 @@
     <div class="modal-actions" id="modalActions"></div>
     <img class="modal-content" id="modalImage">
     <div class="modal-info" id="modalInfo"></div>
+    <div class="modal-hint">滚轮缩放 · 拖动查看 · 双击还原</div>
   </div>
   
   <div class="container full-width">
@@ -1188,6 +1204,70 @@
       previewIndex = index;
       updatePreviewModal();
     }
+
+    // 预览图缩放：滚轮以光标为中心缩放，放大后拖动平移，双击/切图/关闭时还原
+    let modalZoom = 1;
+    let modalPanX = 0;
+    let modalPanY = 0;
+
+    function applyModalTransform() {
+      const modalImg = document.getElementById('modalImage');
+      modalImg.style.transform = `translate(calc(-50% + ${modalPanX}px), calc(-50% + ${modalPanY}px)) scale(${modalZoom})`;
+    }
+
+    function resetModalZoom() {
+      modalZoom = 1;
+      modalPanX = 0;
+      modalPanY = 0;
+      applyModalTransform();
+    }
+
+    document.getElementById('imageModal').addEventListener('wheel', (e) => {
+      if (modalZoom <= 1 && e.deltaY > 0) return;
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.2 : 1 / 1.2;
+      const newZoom = Math.min(10, Math.max(1, modalZoom * factor));
+      if (newZoom === modalZoom) return;
+      // 保持光标下的图像点不动：中心点(50%vw+panX, 45%vh+panY)向光标方向补偿
+      const dX = e.clientX - (window.innerWidth * 0.5 + modalPanX);
+      const dY = e.clientY - (window.innerHeight * 0.45 + modalPanY);
+      modalPanX += dX * (1 - newZoom / modalZoom);
+      modalPanY += dY * (1 - newZoom / modalZoom);
+      modalZoom = newZoom;
+      if (modalZoom === 1) { modalPanX = 0; modalPanY = 0; }
+      applyModalTransform();
+    }, { passive: false });
+
+    let modalDragStart = null;
+
+    document.getElementById('modalImage').addEventListener('mousedown', (e) => {
+      if (modalZoom <= 1) return;
+      modalDragStart = { x: e.clientX, y: e.clientY, panX: modalPanX, panY: modalPanY };
+      e.target.classList.add('dragging');
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!modalDragStart) return;
+      modalPanX = modalDragStart.panX + (e.clientX - modalDragStart.x);
+      modalPanY = modalDragStart.panY + (e.clientY - modalDragStart.y);
+      applyModalTransform();
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!modalDragStart) return;
+      modalDragStart = null;
+      document.getElementById('modalImage').classList.remove('dragging');
+    });
+
+    document.getElementById('modalImage').addEventListener('dblclick', () => {
+      if (modalZoom > 1) {
+        resetModalZoom();
+      } else {
+        modalZoom = 2.5;
+        applyModalTransform();
+      }
+    });
     
     function updatePreviewModal() {
       const modal = document.getElementById('imageModal');
@@ -1216,6 +1296,7 @@
       }
       modalActions.innerHTML = actionsHtml;
 
+      resetModalZoom();
       modal.style.display = 'block';
     }
     
@@ -1306,6 +1387,7 @@
       if (event && event.target.tagName === 'IMG') return;
       const modal = document.getElementById('imageModal');
       modal.style.display = 'none';
+      resetModalZoom();
     }
     
     document.addEventListener('keydown', (e) => {
