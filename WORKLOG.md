@@ -2,6 +2,13 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-19 tdl 掉登录全自动重登（desktop 导入 + winpty 应答），本次实情是服务端踢 session 需人工
+
+- **起因**：GUI 跑下载报 `not authorized. please login first`，脚本停下来等人登录。用户问「为什么不能自己登录」——确实可以：`tdl login -T desktop`（默认方式）是读本机 Telegram Desktop tdata 导入会话，原脚本 docstring 把它误归类为「必须交互」。
+- **改动**（`tools/tdl_downloader/tdl_downloader_v2.py`）：① `check_tdl_login()` 返回值 bool→三态 `"ok"/"not_authorized"/"failed"`——**只有明确未登录才触发自动重登**，限速/抖动/代理不通绝不触发（防误覆盖活会话）；② 主流程 export 失败后诊断，`not_authorized` 时自动 `tdl_login("desktop")` 一次，成功重试当前频道，失败落人工提示；③ `tdl_login` desktop 分支新增全自动链路 `_auto_desktop_login`：嫁接最小临时 tdata（`key_datas`+主账户 `D877F783D5D3EF8C` 两件套，排除 11 个历史残留账户干扰，`-d` 指临时父目录让 tdl 自动拼 tdata）+ `winpty -Xallow-non-tty` 伪终端自动应答 tdl 的账户选择菜单（survey 需真终端，非 TTY 报 Incorrect function；见 "successfully" 即收手，登出确认走默认否且绕开 winpty assert 崩溃的已知问题）；缺 winpty/tdata 异常退回原交互式。
+- **验证**：py_compile 过；三态判定实测（未登录态 0.3s 判 `not_authorized` 不误判）；全自动链路端到端实测——自动选账户、会话导入成功（Import successfully）→ 验证环节如实报 `not_authorized` → 正确落人工提示。**本次故障根因是 Telegram 服务端把 session 踢了，tdata 里的 key 同样失效**（导入成功但 not authorized），任何本地自动重登都救不了，已留待用户人工登录一次（`python tdl_downloader_v2.py --login`，desktop 回车即成 / 或 code/qr）；自动链路适用于「tdata 会话有效而 tdl 会话损坏/被清」场景。
+- **提交**：见 git log（feat(tools) tdl 掉登录自动重登）。
+
 ## 2026-09-16 admin 审核页预览图补滚轮缩放（本地版缺失，用户切换本地版后感知"退化"）
 
 - **用户报**：审核页单击图片放大后滚轮无法缩放。根因：修好 ADMIN_DIR 后 GUI 打开的是**本地版** admin.html（9月2日副本，从未有过缩放），此前用户一直看的是云端托管版；属本地/托管版本差，非功能回归。

@@ -2,9 +2,12 @@ import subprocess
 import json
 import os
 import hashlib
+import queue
 import re
+import shutil
 import socket
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime
@@ -705,13 +708,16 @@ def _tdl_base_args() -> list[str]:
     return ["--proxy", PROXY, "--reconnect-timeout", RECONNECT_TIMEOUT]
 
 
-def check_tdl_login() -> bool:
-    """检查 tdl 登录状态。
+def check_tdl_login() -> str:
+    """检查 tdl 登录状态，返回三态：
+    - "ok"：已登录
+    - "not_authorized"：明确未登录（输出含 not authorized / please login），
+      此时可安全自动重登——旧会话已失效，desktop 导入覆盖它无损失
+    - "failed"：代理客户端没开 / 节点不通 / 限速抖动，绝不触发自动重登
+      （否则可能把还活着的会话覆盖掉）
 
     用 chat ls（只列对话列表，不拉内容）替代 chat export --with-content，
-    避免内容下载限速被误判为未登录。区分结果：
-    - 明确未登录（输出含 not authorized / please login）：直接返回 False
-    - 代理客户端没开（端口不可达）：提示启动，不重试
+    避免内容下载限速被误判为未登录。探测细节：
     - 节点到 Telegram 不通（端到端探测失败）：跳过 tdl 干等，等恢复再查
     - 链路通但 tdl 冷启动握手慢：递增超时重试（探测顺带预热代理链路）
     """
@@ -728,7 +734,7 @@ def check_tdl_login() -> bool:
             if not probe_proxy_port():
                 print(f"  -> 本地代理端口不可达（{PROXY}），代理客户端可能未运行")
                 print(f"  -> 请先启动代理客户端，再重新运行脚本")
-                return False
+                return "failed"
             if last_e2e_ok is False:
                 # 上一轮已确认节点不通：先探测，恢复了才值得跑 tdl（否则只是干等超时）
                 last_e2e_ok = _socks5_e2e_probe()
@@ -748,7 +754,7 @@ def check_tdl_login() -> bool:
             elapsed = time.time() - start
             if result.returncode == 0:
                 print(f"✓ tdl 已登录（耗时 {elapsed:.1f}s）")
-                return True
+                return "ok"
 
             # 返回非 0：区分"未登录"和"其它失败"
             combined = (result.stdout + result.stderr).strip()
@@ -761,7 +767,7 @@ def check_tdl_login() -> bool:
                         if line and not any(p in line for p in TDL_IGNORE_PATTERNS):
                             print(f"  {line}")
                 print("  -> 请登录: tdl login --proxy socks5://127.0.0.1:17891")
-                return False
+                return "not_authorized"
 
             # 其它失败（限速/网络抖动）：重试，不判未登录
             print(f"⚠ 连接异常（耗时 {elapsed:.1f}s，返回码 {result.returncode}），可能是限速或网络抖动")
@@ -775,7 +781,7 @@ def check_tdl_login() -> bool:
             if not probe_proxy_port():
                 print(f"  -> 本地代理端口不可达（{PROXY}），代理客户端可能未运行")
                 print(f"  -> 请先启动代理客户端，再重新运行脚本")
-                return False
+                return "failed"
             last_e2e_ok = _socks5_e2e_probe()
             if last_e2e_ok:
                 print("  -> 代理链路端到端连通（已顺带预热），应是 tdl 冷启动握手慢，下一轮加长超时")
@@ -783,21 +789,150 @@ def check_tdl_login() -> bool:
                 print("  -> 节点到 Telegram 不通，下一轮先等恢复再检查")
         except Exception as e:
             print(f"✗ 检查登录状态失败: {e}")
-            return False
+            return "failed"
 
     if last_e2e_ok is False:
         print(f"  -> 重试 {max_retries} 次节点均到不了 Telegram，临时故障，稍后重试或更换节点")
     else:
         print(f"  -> 重试 {max_retries} 次仍失败，可稍后重试或直接运行下载观察")
     print(f"  -> 这不代表未登录（登录态存在本地）")
-    return False
+    return "failed"
+
+
+# Telegram Desktop 主账户数据文件：gotd 按 key_datas 内的账户索引解密 data 系列
+# 文件（data 的哈希名即 D877F783D5D3EF8C），缺任何一个都会导入报错
+TG_MAIN_ACCOUNT_KEYS = ("key_datas", "D877F783D5D3EF8Cs", "D877F783D5D3EF8C")
+
+
+def _find_winpty() -> Optional[str]:
+    """定位 Git 自带的 winpty.exe（伪终端，用于自动应答 tdl 的交互菜单）。"""
+    found = shutil.which("winpty")
+    if found:
+        return found
+    for cand in (r"C:\Program Files\Git\usr\bin\winpty.exe",
+                 r"C:\Program Files (x86)\Git\usr\bin\winpty.exe"):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+def _auto_desktop_login() -> bool:
+    """全自动 desktop 登录：嫁接最小 tdata + winpty 伪终端自动应答 tdl 菜单。
+
+    tdl 0.20.1 的 desktop 导入会无条件弹账户选择菜单（survey 库，需要真终端），
+    非交互环境直接报 Incorrect function。绕法分两步：
+    1. 只拷 key_datas + 主账户 data 文件到临时 tdata（-d 指临时父目录，tdl 会
+       自动拼 tdata 子目录），排除真实 tdata 里历史残留账户的干扰
+    2. winpty -Xallow-non-tty 把管道输入转进伪终端：见菜单发回车选唯一账户，
+       见导入成功即收手——后续「是否登出桌面端」确认保持默认否（不登出用户
+       的 Telegram Desktop），且 winpty 在该确认步有 assert 崩溃的已知问题，
+       导入落库后进程怎么退出都不影响结果
+    """
+    winpty = _find_winpty()
+    if not winpty:
+        print("✗ 未找到 winpty（Git 自带），无法自动应答 tdl 交互菜单")
+        return False
+    tdata = os.path.join(os.environ.get("APPDATA", ""), "Telegram Desktop", "tdata")
+    if not os.path.isdir(tdata):
+        print(f"✗ 未找到 Telegram Desktop 会话目录: {tdata}")
+        return False
+
+    tmp_root = tempfile.mkdtemp(prefix="tdl_login_")
+    tmp_tdata = os.path.join(tmp_root, "tdata")
+    os.makedirs(tmp_tdata)
+    try:
+        for name in TG_MAIN_ACCOUNT_KEYS:
+            src = os.path.join(tdata, name)
+            dst = os.path.join(tmp_tdata, name)
+            try:
+                if os.path.isdir(src):
+                    shutil.copytree(src, dst)
+                else:
+                    shutil.copy2(src, dst)
+            except OSError as e:
+                print(f"✗ 嫁接临时 tdata 失败（{name}）: {e}")
+                return False
+
+        cmd = [winpty, "-Xallow-non-tty", TDL_PATH, "login", "-T", "desktop",
+               "-d", tmp_root, "--proxy", PROXY]
+        try:
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        except OSError as e:
+            print(f"✗ 启动自动登录进程失败: {e}")
+            return False
+        return _feed_tdl_login_menu(proc)
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+
+
+def _feed_tdl_login_menu(proc: subprocess.Popen) -> bool:
+    """监视 tdl 登录输出，在账户菜单出现时自动发回车。返回是否导入成功。
+
+    winpty 输出经管道逐字节读入（Windows 管道无超时读，用读线程 + 队列，
+    主线程带总超时轮询），关键词触发写 stdin。
+    """
+    out_q: "queue.Queue[bytes]" = queue.Queue()
+
+    def _reader() -> None:
+        try:
+            while True:
+                byte = proc.stdout.read(1)
+                if not byte:
+                    break
+                out_q.put(byte)
+        except OSError:
+            pass
+        out_q.put(b"")  # EOF 哨兵
+
+    threading.Thread(target=_reader, daemon=True).start()
+
+    deadline = time.time() + 90
+    buf = b""
+    sent_user = False
+    imported = False
+    while time.time() < deadline:
+        try:
+            chunk = out_q.get(timeout=1.0)
+        except queue.Empty:
+            continue
+        if not chunk:
+            break  # 进程已退出
+        buf += chunk
+        text = buf.decode("utf-8", errors="replace")
+        if not sent_user and "Choose a user id" in text:
+            proc.stdin.write(b"\r")
+            proc.stdin.flush()
+            sent_user = True
+            print("  -> 已自动选择账户")
+        elif sent_user and "successfully" in text:
+            imported = True
+            print("  -> 会话导入成功")
+            try:
+                proc.stdin.close()  # 不再应答，登出确认走默认否
+            except OSError:
+                pass
+            break
+    if not imported:
+        proc.kill()
+        proc.wait(timeout=10)
+        tail = buf.decode("utf-8", errors="replace").replace("\r", "").strip()[-400:]
+        print(f"✗ 自动登录未完成（超时或失败），输出尾部:\n{tail}")
+        return False
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()  # tdl 卡在登出确认收不到输入，杀掉即可，导入已落库
+    return True
 
 
 def tdl_login(login_type: str = "desktop") -> bool:
-    """调起 tdl 交互式登录。login_type: desktop / code / qr。
+    """调起 tdl 登录。login_type: desktop / code / qr。
 
-    登录是交互式操作（选用户/输验证码/扫码），必须由用户在终端完成，
-    本函数只负责清理残留进程后拉起命令，完成后自动验证登录状态。
+    desktop 方式先走全自动（读取本机 Telegram Desktop 的 tdata 导入会话，
+    winpty 自动应答菜单）；自动方式不可用时退回交互式（继承终端，需手动
+    按回车选账户）。code / qr 必须人工参与（验证码 / 扫码），直接交互式。
+    完成后统一验证登录状态。
     """
     if login_type not in ("desktop", "code", "qr"):
         print(f"✗ 不支持的登录方式: {login_type}（可选 desktop / code / qr）")
@@ -806,8 +941,16 @@ def tdl_login(login_type: str = "desktop") -> bool:
     print("登录前清理残留 tdl 进程（避免数据库锁冲突）...")
     _kill_tdl_processes()
 
-    print(f"\n启动 tdl 登录（方式: {login_type}）...")
-    print("提示: 登录会覆盖 default namespace 的现有会话")
+    if login_type == "desktop":
+        print("\n尝试全自动 desktop 登录（读取本机 Telegram Desktop 会话）...")
+        print("提示: 登录会覆盖 default namespace 的现有会话")
+        if _auto_desktop_login():
+            _kill_tdl_processes()
+            print("\n验证登录状态...")
+            return check_tdl_login() == "ok"
+        print("-> 全自动登录未成功，退回交互式登录（按提示回车/输入）")
+
+    print(f"\n启动 tdl 交互式登录（方式: {login_type}）...")
     cmd = [TDL_PATH, "login", "-T", login_type, "--proxy", PROXY]
     try:
         # 交互式登录，继承当前终端的 stdin/stdout
@@ -822,7 +965,7 @@ def tdl_login(login_type: str = "desktop") -> bool:
     # 登录后清理可能的残留进程，再验证
     _kill_tdl_processes()
     print("\n验证登录状态...")
-    return check_tdl_login()
+    return check_tdl_login() == "ok"
 
 
 def check_channels() -> None:
@@ -994,21 +1137,49 @@ def main() -> None:
     else:
         print("\n首次运行，无缓存，将开始全新下载。")
 
-    login_diag_ok: Optional[bool] = None  # export 失败时的登录/网络诊断结果缓存
+    login_diag: Optional[str] = None  # export 失败时的登录/网络诊断结果缓存（"ok"/"not_authorized"/"failed"）
     for channel, limit in CHANNELS.items():
         print(f"\n\n处理频道: {channel} (限制 {limit} 条)")
         export_file = os.path.join(DOWNLOAD_DIR, f"{channel}_export.json")
 
-        if export_channel(channel, limit, export_file, progress_cache):
-            filter_and_download(export_file, DOWNLOAD_DIR, channel, limit, md5_cache, progress_cache, bad_cache)
-        else:
-            # export 失败：诊断一次区分「掉登录/网络不通」（中止整轮）和偶发失败（继续）
-            if login_diag_ok is None:
-                login_diag_ok = check_tdl_login()
-            if login_diag_ok is False:
-                print("\n请先登录 tdl（或检查代理客户端/节点），然后重新运行脚本")
-                print("  登录命令: python tdl_downloader_v2.py --login")
+        export_ok = False
+        abort_round = False
+        auto_relogin_done = False  # 整轮最多自动重登一次，防反复覆盖会话
+        while True:
+            if export_channel(channel, limit, export_file, progress_cache):
+                export_ok = True
                 break
+            # export 失败：诊断一次区分「掉登录」「网络不通」和偶发失败
+            if login_diag is None:
+                login_diag = check_tdl_login()
+            if login_diag == "ok":
+                print(f"⚠ 登录正常，频道 {channel} 导出失败疑似偶发，跳过本频道")
+                break
+            if login_diag == "failed":
+                print("\n请检查代理客户端/节点，然后重新运行脚本")
+                abort_round = True
+                break
+            # 明确未登录：自动 desktop 重登（读取本机 Telegram Desktop 会话，非交互）
+            if auto_relogin_done:
+                print("\n自动重登后仍未恢复登录，请人工登录后重新运行脚本")
+                print("  登录命令: python tdl_downloader_v2.py --login")
+                abort_round = True
+                break
+            auto_relogin_done = True
+            print("\n检测到 tdl 掉登录，尝试自动重登（desktop 方式，读取本机 Telegram Desktop 会话）...")
+            if tdl_login("desktop"):
+                print("✓ 自动重登成功，重试当前频道导出")
+                login_diag = "ok"  # 已恢复，后续失败按偶发处理，不再触发重登
+                continue
+            print("✗ 自动重登失败（本机 Telegram Desktop 会话可能也失效，需人工扫码/验证码）")
+            abort_round = True
+            break
+
+        if abort_round:
+            break
+
+        if export_ok:
+            filter_and_download(export_file, DOWNLOAD_DIR, channel, limit, md5_cache, progress_cache, bad_cache)
 
         if os.path.exists(export_file):
             os.remove(export_file)
