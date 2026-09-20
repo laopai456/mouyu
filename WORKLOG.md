@@ -2,6 +2,13 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-21 新发现：公开频道不加入也能下载——换新号后 5 频道全拉成功，加群从"必需"降级为"可选"
+
+- **发现**：换新号后只加入了 @xinjingdaily 1 个频道（`--check-channels` 实测 1/5），跑 `--auto` 却把其余 4 个未加入频道（woshadiao / shadiao_refuse / wtmsd / xinjingdaily_reject）的图全部正常下载（共 40 张）。结论：tdl 的 `chat export -c 用户名` 解析公开用户名即可拉全量历史，**不需要是频道成员**（同 t.me 网页预览机制，MTProto 允许非成员读公开频道历史）。只有私有频道/群才必须加入。此前脚本和 09-19 WORKLOG 里"换号后需重新加 5 个频道"的说法过时——加群仅为防频道转私/改用户名后失联，非下载前提。
+- **改动**（`tools/tdl_downloader/tdl_downloader_v2.py`，仅注释与提示文案，无逻辑变更）：`check_channels()` docstring 记录实测结论；"未加入"提示从 ✗ 降为 ○ 并注明"公开频道不加也能正常下载"；删掉"全部加入后重新运行/可以开始下载"等加群必需的误导措辞。
+- **验证**：真实换号环境实测（下载全成功 + check-channels 显示 1/5 已加入，互相印证）；改动仅为注释/文案，py_compile 过。
+- **提交**：见 git log（docs(tools) 公开频道免加群可下载）。
+
 ## 2026-09-19 tdl 掉登录全自动重登（desktop 导入 + winpty 应答），本次实情是服务端踢 session 需人工
 
 - **起因**：GUI 跑下载报 `not authorized. please login first`，脚本停下来等人登录。用户问「为什么不能自己登录」——确实可以：`tdl login -T desktop`（默认方式）是读本机 Telegram Desktop tdata 导入会话，原脚本 docstring 把它误归类为「必须交互」。

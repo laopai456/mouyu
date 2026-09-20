@@ -971,7 +971,10 @@ def tdl_login(login_type: str = "desktop") -> bool:
 def check_channels() -> None:
     """对比 CHANNELS 配置和 chat ls 结果，列出已加入/未加入的频道。
 
-    tdl 无 join 命令，未加入的频道只能输出 t.me 链接由用户手动添加。
+    实测（2026-09 换新号后仅加入 1/5 个频道）：公开频道不加入也能 chat export
+    拉全量历史下载（同 t.me 网页预览机制，MTProto 允许非成员读公开频道历史）。
+    加群非必需，只为频道万一转私/改用户名时不失联；私有频道才必须加入。
+    tdl 无 join 命令，未加入频道只输出 t.me 链接供手动添加（可选）。
     """
     print("获取当前账号已加入的对话列表...")
     _kill_tdl_processes()
@@ -1031,13 +1034,12 @@ def check_channels() -> None:
         print(f"  @{c}")
 
     if missing:
-        print(f"\n✗ 未加入 ({len(missing)}):")
-        print("  tdl 无自动加群命令，请手动加入以下链接:")
+        print(f"\n○ 未加入 ({len(missing)})（公开频道不加也能正常下载）:")
+        print("  tdl 无自动加群命令；加群仅为防频道转私后失联，如需加入请点:")
         for c in missing:
             print(f"  - https://t.me/{c}  ( @{c} )")
-        print("\n  全部加入后重新运行: python tdl_downloader_v2.py --check-channels")
     else:
-        print("\n✓ 全部频道已加入，可以开始下载")
+        print("\n✓ 全部频道已加入")
     print(f"{'=' * 50}")
 
 
