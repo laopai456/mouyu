@@ -1,7 +1,7 @@
-"""简易 GUI — TDL 下载 + COS 上传"""
+"""GUI — TDL/煎蛋下载 + COS 上传 + QQ 机器人控制台（计数/高亮/进度条版）"""
 
 import tkinter as tk
-from tkinter import ttk, scrolledtext
+from tkinter import ttk, scrolledtext, filedialog
 import subprocess
 import threading
 import json
@@ -67,6 +67,24 @@ BOT_PORT = 8080             # NoneBot 监听端口（bot 存活判定，与看�
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 INCLUDE_TYPES = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
+
+# ── 日志关键词着色（顺序即优先级：一行命中多条取更严重的）──
+LOG_TAG_PATTERNS = (
+    ("tag_err", re.compile(r"ERROR|FATAL|FAIL(?:ED)?|失败|✗|卡死|熔断|ABORT|not authorized", re.I)),
+    ("tag_warn", re.compile(r"WARN(?:ING)?|警告|删除|重试|停滞|超时|清理", re.I)),
+    ("tag_ok", re.compile(r"SUCCESS|done|完成|成功|✓|已恢复", re.I)),
+    ("tag_info", re.compile(r"\bINFO\b|\bdiag\b", re.I)),
+)
+
+# ── 子进程 stdout 进度行解析规则（对应 tdl/煎蛋/uploader 的既有输出格式）──
+PROGRESS_RULES = (
+    (re.compile(r"已下载 (\d+) 张（预期 (\d+) 张"), "total"),        # tdl：总数已知
+    (re.compile(r"第(\d+)张 done"), "count"),                        # tdl：频道逐张
+    (re.compile(r"JANDAN_PROGRESS 本轮已下载(\d+)张"), "count"),      # 煎蛋：每10张
+    (re.compile(r"共 (\d+) 张: 新增 (\d+), 重复 (\d+), 跳过 (\d+), 失败 (\d+)"), "upload_summary"),
+    (re.compile(r"✓ \S"), "upload"),                                  # uploader：逐张成功
+)
+RAW_LOG_MAX_LINES = 5000  # 命令行原始输出面板保留行数上限
 # 托管版后台（本地 admin.html 缺失时的回退）
 ADMIN_URL = os.environ.get("MOYU_ADMIN_URL", "https://MOYU_ENV_ID_PLACEHOLDER-1414730090.tcloudbaseapp.com/admin.html")
 ADMIN_DIR = BASE_DIR / "admin"
@@ -100,6 +118,44 @@ class _QuietAdminServer(ThreadingHTTPServer):
 
 running_process: subprocess.Popen | None = None
 process_lock = threading.Lock()
+
+
+class ToolTip:
+    """轻量悬浮提示：悬停 500ms 后出现在控件下方，移开即消失。"""
+
+    def __init__(self, widget, text: str):
+        self.widget = widget
+        self.text = text
+        self._tip: tk.Toplevel | None = None
+        self._after_id = None
+        widget.bind("<Enter>", self._schedule)
+        widget.bind("<Leave>", self._hide)
+        widget.bind("<ButtonPress>", self._hide)
+
+    def _schedule(self, _e=None):
+        self._after_id = self.widget.after(500, self._show)
+
+    def _show(self):
+        if self._tip is not None:
+            return
+        x = self.widget.winfo_rootx() + 10
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        self._tip = tk.Toplevel(self.widget)
+        self._tip.wm_overrideredirect(True)
+        self._tip.wm_geometry(f"+{x}+{y}")
+        tk.Label(
+            self._tip, text=self.text, justify=tk.LEFT,
+            bg="#333333", fg="#ffffff", relief=tk.SOLID, borderwidth=1,
+            font=("", 9), padx=6, pady=3,
+        ).pack()
+
+    def _hide(self, _e=None):
+        if self._after_id is not None:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
+        if self._tip is not None:
+            self._tip.destroy()
+            self._tip = None
 
 
 # ── 计数 ──
@@ -138,13 +194,20 @@ class App:
                 self.root.iconbitmap(str(ICON_FILE))
             except Exception:
                 pass  # 图标加载失败不挡主流程（顶多退回默认图标）
-        self.root.geometry("1000x620")
-        self.root.minsize(800, 480)
+        self.root.geometry("1040x660")
+        self.root.minsize(880, 540)
 
         # 当前运行状态: None | "download" | "jandan" | "upload"
         self.current_action: str | None = None
         # 机器人按钮互斥（启/停/清理 同时只允许一个在跑）
         self._bot_busy = False
+        # 机器人运行态（UI 互斥：运行中「启动」置灰；开窗时按端口探测一次，看门狗自动拉起也能识别）
+        self._bot_ui_running = False
+        # 日志跟随滚动开关（关掉后新日志不强制滚底，方便上滑排查旧日志）
+        self._follow_var = tk.BooleanVar(value=True)
+        # 任务进度：总数已知走 determinate，未知走 indeterminate
+        self._progress_total: int | None = None
+        self._progress_done_count = 0
         # 云端待审核数：查询去重 + 5 分钟定时刷新节拍 + 失败只告警一次
         self._pending_fetching = False
         self._pending_fail_logged = False
@@ -153,20 +216,26 @@ class App:
         # 样式
         style = ttk.Style()
         style.theme_use("vista")
+        # 运行中的停止按钮：红色加粗文字（vista 主题不认背景色，用文字色高亮）
+        style.configure("Danger.TButton", foreground="#d93026", font=("", 10, "bold"))
+        try:
+            style.configure("TPanedwindow", sashwidth=6)  # 分割线加粗可见、好抓
+        except tk.TclError:
+            pass
 
-        # ─ 顶部信息栏 ─
+        # ─ 顶部：左侧状态栏 + 右侧任务按钮组 ─
         info_frame = ttk.Frame(self.root, padding=12)
         info_frame.pack(fill=tk.X)
 
         ttk.Label(info_frame, text="📥 已下载:", font=("", 12)).pack(side=tk.LEFT, padx=(0, 4))
-        self.dl_count_label = ttk.Label(info_frame, text="0", font=("", 16, "bold"), foreground="#667eea")
-        self.dl_count_label.pack(side=tk.LEFT, padx=(0, 20))
+        self.dl_count_label = ttk.Label(info_frame, text="0", font=("", 16, "bold"), foreground="#52c41a")
+        self.dl_count_label.pack(side=tk.LEFT, padx=(0, 16))
 
         ttk.Label(info_frame, text="📤 已上传:", font=("", 12)).pack(side=tk.LEFT, padx=(0, 4))
-        self.ul_count_label = ttk.Label(info_frame, text="0", font=("", 16, "bold"), foreground="#52c41a")
-        self.ul_count_label.pack(side=tk.LEFT)
+        self.ul_count_label = ttk.Label(info_frame, text="0", font=("", 16, "bold"), foreground="#667eea")
+        self.ul_count_label.pack(side=tk.LEFT, padx=(0, 16))
 
-        ttk.Label(info_frame, text="⏳ 待审核:", font=("", 12)).pack(side=tk.LEFT, padx=(20, 4))
+        ttk.Label(info_frame, text="⏳ 待审核:", font=("", 12)).pack(side=tk.LEFT, padx=(0, 4))
         self.pending_count_label = ttk.Label(
             info_frame, text="…", font=("", 16, "bold"), foreground="#faad14", cursor="hand2"
         )
@@ -174,60 +243,74 @@ class App:
         # 点击数字立即刷新（云端查询较慢，不做进 5 秒本地计数轮询）
         self.pending_count_label.bind("<Button-1>", lambda e: self.refresh_pending_count())
 
-        # ─ 按钮区 ─
-        btn_frame = ttk.Frame(self.root, padding=(12, 0, 12, 6))
-        btn_frame.pack(fill=tk.X)
+        # 任务按钮组（右侧）：运行中三个全置灰，由独立「停止」按钮接管
+        task_frame = ttk.Frame(info_frame)
+        task_frame.pack(side=tk.RIGHT)
 
-        self.dl_btn = ttk.Button(btn_frame, text="⬇ TG下载", command=lambda: self.toggle_action("download"), width=14)
-        self.dl_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self.dl_btn = ttk.Button(task_frame, text="⬇ TG下载", command=lambda: self.toggle_action("download"), width=12)
+        self.dl_btn.pack(side=tk.LEFT, padx=(0, 6))
 
-        self.jd_btn = ttk.Button(btn_frame, text="🥚 煎蛋下载", command=lambda: self.toggle_action("jandan"), width=14)
-        self.jd_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self.jd_btn = ttk.Button(task_frame, text="🥚 煎蛋下载", command=lambda: self.toggle_action("jandan"), width=12)
+        self.jd_btn.pack(side=tk.LEFT, padx=(0, 6))
 
-        self.ul_btn = ttk.Button(btn_frame, text="⬆ 统一上传", command=lambda: self.toggle_action("upload"), width=14)
-        self.ul_btn.pack(side=tk.LEFT, padx=(0, 20))
+        self.ul_btn = ttk.Button(task_frame, text="⬆ 统一上传", command=lambda: self.toggle_action("upload"), width=12)
+        self.ul_btn.pack(side=tk.LEFT, padx=(0, 10))
 
-        # 清理缓存复选框
+        self.stop_btn = ttk.Button(
+            task_frame, text="⏹ 停止", command=self.stop_process,
+            width=10, style="Danger.TButton", state=tk.DISABLED,
+        )
+        self.stop_btn.pack(side=tk.LEFT)
+
+        # ─ 第二行：左复选框 + 右机器人/辅助按钮组 ─
+        ctrl_frame = ttk.Frame(self.root, padding=(12, 0, 12, 6))
+        ctrl_frame.pack(fill=tk.X)
+
         self.clean_cache_var = tk.BooleanVar(value=False)
         self.clean_cache_cb = ttk.Checkbutton(
-            btn_frame, text="下载前清理缓存", variable=self.clean_cache_var
+            ctrl_frame, text="下载前清理缓存", variable=self.clean_cache_var
         )
         self.clean_cache_cb.pack(side=tk.LEFT)
 
-        # 第二行按钮区
-        btn_row2 = ttk.Frame(self.root, padding=(12, 0, 12, 6))
-        btn_row2.pack(fill=tk.X)
+        bot_frame = ttk.Frame(ctrl_frame)
+        bot_frame.pack(side=tk.RIGHT)
 
-        self.copy_log_btn = ttk.Button(btn_row2, text="📋 复制日志", command=self.copy_log, width=16)
-        self.copy_log_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self.bot_start_btn = ttk.Button(bot_frame, text="🤖 启动机器人", command=self.bot_start, width=13)
+        self.bot_start_btn.pack(side=tk.LEFT, padx=(0, 6))
 
-        self.admin_btn = ttk.Button(btn_row2, text="🔍 打开审核", command=self.open_admin, width=16)
-        self.admin_btn.pack(side=tk.LEFT)
+        self.bot_stop_btn = ttk.Button(bot_frame, text="⏹ 停止机器人", command=self.bot_stop, width=13)
+        self.bot_stop_btn.pack(side=tk.LEFT, padx=(0, 12))
 
-        # 第三行按钮区：QQ 机器人控制（判定/清退逻辑与 qqbot 看门狗同一套）
-        btn_row3 = ttk.Frame(self.root, padding=(12, 0, 12, 12))
-        btn_row3.pack(fill=tk.X)
+        self.bot_panel_btn = ttk.Button(bot_frame, text="📊 打开面板", command=self.bot_panel, width=11)
+        self.bot_panel_btn.pack(side=tk.LEFT, padx=(0, 12))
 
-        self.bot_start_btn = ttk.Button(btn_row3, text="🤖 启动机器人", command=self.bot_start, width=14)
-        self.bot_start_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self.copy_log_btn = ttk.Button(ctrl_frame, text="📋 复制日志", command=self.copy_log, width=11)
+        self.copy_log_btn.pack(side=tk.RIGHT)
 
-        self.bot_stop_btn = ttk.Button(btn_row3, text="⏹ 停止机器人", command=self.bot_stop, width=14)
-        self.bot_stop_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self.admin_btn = ttk.Button(ctrl_frame, text="🔍 打开审核", command=self.open_admin, width=11)
+        self.admin_btn.pack(side=tk.RIGHT, padx=(0, 6))
 
-        self.bot_panel_btn = ttk.Button(btn_row3, text="📊 打开面板", command=self.bot_panel, width=14)
-        self.bot_panel_btn.pack(side=tk.LEFT)
-
-        # ─ 日志区（左右分屏：工具日志 | 机器人日志） ─
-        log_frame = ttk.Frame(self.root, padding=(12, 0, 12, 12))
+        # ─ 日志区（左右分屏：工具日志 | 机器人日志，分割线可拖） ─
+        log_frame = ttk.Frame(self.root, padding=(12, 0, 12, 4))
         log_frame.pack(fill=tk.BOTH, expand=True)
 
         log_paned = ttk.PanedWindow(log_frame, orient=tk.HORIZONTAL)
         log_paned.pack(fill=tk.BOTH, expand=True)
 
-        tool_pane = ttk.LabelFrame(log_paned, text="工具日志", padding=2)
-        bot_pane = ttk.LabelFrame(log_paned, text="机器人日志（qqbot/logs/bot.log）", padding=2)
+        tool_pane = ttk.Frame(log_paned)
+        bot_pane = ttk.Frame(log_paned)
         log_paned.add(tool_pane, weight=1)
         log_paned.add(bot_pane, weight=1)
+
+        # 面板标题栏：标题 + 跟随开关 + 清空/保存 小按钮
+        tool_header = ttk.Frame(tool_pane)
+        tool_header.pack(fill=tk.X)
+        ttk.Label(tool_header, text="工具日志", font=("", 10, "bold")).pack(side=tk.LEFT)
+        ttk.Checkbutton(tool_header, text="跟随", variable=self._follow_var).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(tool_header, text="清空", width=5,
+                   command=lambda: self.clear_log(self.log)).pack(side=tk.RIGHT)
+        ttk.Button(tool_header, text="保存", width=5,
+                   command=lambda: self.save_log(self.log, "工具日志")).pack(side=tk.RIGHT, padx=(0, 4))
 
         self.log = scrolledtext.ScrolledText(
             tool_pane, font=("Consolas", 10), wrap=tk.WORD,
@@ -236,12 +319,53 @@ class App:
         )
         self.log.pack(fill=tk.BOTH, expand=True)
 
+        bot_header = ttk.Frame(bot_pane)
+        bot_header.pack(fill=tk.X)
+        ttk.Label(bot_header, text="机器人日志（qqbot/logs/bot.log）", font=("", 10, "bold")).pack(side=tk.LEFT)
+        ttk.Button(bot_header, text="清空", width=5,
+                   command=lambda: self.clear_log(self.botlog)).pack(side=tk.RIGHT)
+        ttk.Button(bot_header, text="保存", width=5,
+                   command=lambda: self.save_log(self.botlog, "机器人日志")).pack(side=tk.RIGHT, padx=(0, 4))
+
         self.botlog = scrolledtext.ScrolledText(
             bot_pane, font=("Consolas", 10), wrap=tk.WORD,
             bg="#1e1e1e", fg="#9cdcfe", insertbackground="white",
             state=tk.DISABLED,
         )
         self.botlog.pack(fill=tk.BOTH, expand=True)
+
+        # 关键词着色 tag（深底配色，ERROR红/警告橙/完成绿/INFO蓝）
+        for w in (self.log, self.botlog):
+            w.tag_configure("tag_err", foreground="#f14c4c")
+            w.tag_configure("tag_warn", foreground="#ffa657")
+            w.tag_configure("tag_ok", foreground="#56d364")
+            w.tag_configure("tag_info", foreground="#7aa2f7")
+
+        # 右键菜单（复制选中/复制整行；机器人面板可打开 bot.log 源文件）
+        self._attach_log_menu(self.log, source_file=None)
+        self._attach_log_menu(self.botlog, source_file=QQBOT_BOT_LOG)
+
+        # 任务进度条 + 文字（工具区底部）
+        progress_frame = ttk.Frame(self.root, padding=(12, 2, 12, 0))
+        progress_frame.pack(fill=tk.X)
+        self.progress_label = ttk.Label(progress_frame, text="空闲")
+        self.progress_label.pack(side=tk.LEFT)
+        self.progress_bar = ttk.Progressbar(progress_frame, mode="determinate")
+        self.progress_bar.pack(side=tk.RIGHT, fill=tk.X, expand=True)
+
+        # 折叠面板：命令行原始输出（默认收起降噪音；长输出截断保留尾部）
+        self._raw_visible = False
+        self.raw_toggle_btn = ttk.Button(
+            self.root, text="▶ 命令行原始输出", command=self.toggle_raw_output,
+            width=22, takefocus=0,
+        )
+        self.raw_toggle_btn.pack(anchor=tk.W, padx=12, pady=(2, 2))
+        self.raw_log = scrolledtext.ScrolledText(
+            self.root, height=8, font=("Consolas", 9), wrap=tk.WORD,
+            bg="#141414", fg="#8a8a8a", insertbackground="white",
+            state=tk.DISABLED,
+        )
+        # 故意不 pack —— 默认收起，toggle_raw_output 里按需展开
 
         # 启动自检：解释器/脚本目录解析结果打进日志，路径错了第一时间可见
         self.log_write(f"解释器: {VENV_PYTHON}\n")
@@ -253,19 +377,37 @@ class App:
         self.refresh_counts()
         self.refresh_pending_count()
 
+        # 机器人初始运行态：8080 在监听即视为运行中（看门狗自动拉起的场景也能识别）
+        self._set_bot_state(self._port_listening())
+
+        # 按钮 hover 提示
+        self._attach_tooltips()
+
         # 机器人日志尾随线程（不管 bot 由谁启动，tail bot.log 都能看到）
         threading.Thread(target=self._tail_bot_log, daemon=True).start()
 
         # 窗口关闭时清理子进程
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    # ── 日志写入 ──
+    # ── 日志写入（按关键词着色；「跟随」关掉时不强制滚底）──
+
+    @staticmethod
+    def _line_tag(line: str) -> str:
+        for tag, pat in LOG_TAG_PATTERNS:
+            if pat.search(line):
+                return tag
+        return ""
+
+    def _insert_highlighted(self, widget: scrolledtext.ScrolledText, text: str):
+        widget.config(state=tk.NORMAL)
+        for line in text.splitlines(keepends=True):
+            widget.insert(tk.END, line, (self._line_tag(line),))
+        widget.config(state=tk.DISABLED)
+        if self._follow_var.get():
+            widget.see(tk.END)
 
     def log_write(self, text: str):
-        self.log.config(state=tk.NORMAL)
-        self.log.insert(tk.END, text)
-        self.log.see(tk.END)
-        self.log.config(state=tk.DISABLED)
+        self._insert_highlighted(self.log, text)
         self.root.update_idletasks()
 
     # ── 复制日志 ──
@@ -373,14 +515,115 @@ class App:
     # ── 机器人日志面板 ──
 
     def bot_log_write(self, text: str):
-        self.botlog.config(state=tk.NORMAL)
-        self.botlog.insert(tk.END, text)
+        self._insert_highlighted(self.botlog, text)
         # 行数封顶，超出删最旧的，避免长跑撑爆内存
         lines = int(self.botlog.index("end-1c").split(".")[0])
         if lines > BOT_LOG_MAX_LINES:
+            self.botlog.config(state=tk.NORMAL)
             self.botlog.delete("1.0", f"{lines - BOT_LOG_MAX_LINES}.0")
-        self.botlog.see(tk.END)
-        self.botlog.config(state=tk.DISABLED)
+            self.botlog.config(state=tk.DISABLED)
+
+    # ── 日志清空/保存/右键菜单 ──
+
+    def clear_log(self, widget):
+        widget.config(state=tk.NORMAL)
+        widget.delete("1.0", tk.END)
+        widget.config(state=tk.DISABLED)
+
+    def save_log(self, widget, default_name: str):
+        content = widget.get("1.0", tk.END)
+        if not content.strip():
+            self.toast("日志为空，无需保存", ok=False)
+            return
+        file = filedialog.asksaveasfilename(
+            defaultextension=".log", initialfile=f"{default_name}.log",
+            filetypes=[("日志文件", "*.log"), ("文本文件", "*.txt")],
+        )
+        if not file:
+            return
+        try:
+            Path(file).write_text(content, encoding="utf-8")
+            self.toast(f"日志已保存 {Path(file).name}")
+        except OSError as e:
+            self.toast(f"保存失败: {e}", ok=False)
+
+    def _attach_log_menu(self, widget, source_file: Path | None):
+        menu = tk.Menu(widget, tearoff=0)
+        last_pos = {"x": 0, "y": 0}
+
+        def copy_selection():
+            try:
+                text = widget.get(tk.SEL_FIRST, tk.SEL_LAST)
+            except tk.TclError:
+                return
+            if text:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(text)
+
+        def copy_line():
+            idx = widget.index(f"@{last_pos['x']},{last_pos['y']}")
+            line = widget.get(f"{idx} linestart", f"{idx} lineend")
+            if line:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(line + "\n")
+
+        menu.add_command(label="复制选中内容", command=copy_selection)
+        menu.add_command(label="复制整行", command=copy_line)
+        if source_file is not None:
+            menu.add_separator()
+            menu.add_command(label="打开日志源文件",
+                             command=lambda: self._open_file(source_file))
+
+        def popup(event):
+            last_pos.update(x=event.x, y=event.y)
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+
+        widget.bind("<Button-3>", popup)
+
+    @staticmethod
+    def _open_file(path: Path):
+        try:
+            os.startfile(path)  # Windows
+        except (OSError, AttributeError):
+            webbrowser.open(path.as_uri())
+
+    # ── 轻提示 Toast（右下角，2.6 秒自动消失）──
+
+    def toast(self, text: str, ok: bool = True):
+        t = tk.Toplevel(self.root)
+        t.overrideredirect(True)
+        t.attributes("-topmost", True)
+        bg = "#2e7d32" if ok else "#c62828"
+        tk.Label(t, text=f" {text} ", padx=14, pady=8, bg=bg, fg="#ffffff",
+                 font=("", 10, "bold")).pack()
+        self.root.update_idletasks()
+        t.update_idletasks()
+        rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
+        rw, rh = self.root.winfo_width(), self.root.winfo_height()
+        t.geometry(f"+{rx + rw - t.winfo_width() - 24}+{ry + rh - t.winfo_height() - 44}")
+        t.after(2600, t.destroy)
+
+    # ── 按钮 hover 提示 ──
+
+    def _attach_tooltips(self):
+        tips = (
+            (self.dl_btn, "TG下载：从 Telegram 频道批量拉取图片"),
+            (self.jd_btn, "煎蛋下载：抓取煎蛋无聊图"),
+            (self.ul_btn, "统一上传：把下载文件夹图片上传云端并写库"),
+            (self.stop_btn, "停止当前下载/上传任务"),
+            (self.clean_cache_cb, "下载前清空 tdl/煎蛋 的缓存与去重台账"),
+            (self.bot_start_btn, "启动机器人：经计划任务拉起 NapCat 与 bot 进程"),
+            (self.bot_stop_btn, "停止机器人：只停 bot 进程，不动 NapCat/QQ"),
+            (self.bot_panel_btn, "打开机器人状态面板（独立窗口，每5秒刷新）"),
+            (self.copy_log_btn, "复制工具日志全文到剪贴板"),
+            (self.admin_btn, "打开网页审核后台（本地服务，缺失时回退托管版）"),
+            (self.pending_count_label, "云端待审核数量，点击立即刷新"),
+        )
+        for w, text in tips:
+            ToolTip(w, text)
 
     def _tail_bot_log(self):
         """每秒尾随 qqbot/logs/bot.log（bot.py 写入为 UTF-8，与状态面板同源）。"""
@@ -452,6 +695,16 @@ class App:
         self._bot_busy = False
         for btn in (self.bot_start_btn, self.bot_stop_btn, self.bot_panel_btn):
             btn.config(state=tk.NORMAL)
+        self._apply_bot_mutex()
+
+    def _set_bot_state(self, running: bool):
+        """记录机器人运行态并应用按钮互斥（运行中「启动」置灰，未运行「停止」置灰）。"""
+        self._bot_ui_running = running
+        self._apply_bot_mutex()
+
+    def _apply_bot_mutex(self):
+        self.bot_start_btn.config(state=tk.DISABLED if self._bot_ui_running else tk.NORMAL)
+        self.bot_stop_btn.config(state=tk.NORMAL if self._bot_ui_running else tk.DISABLED)
 
     def _do_bot_start(self):
         self.bot_log_write("\n" + "─" * 46 + "\n🤖 启动机器人……\n")
@@ -468,6 +721,7 @@ class App:
         else:
             self.bot_log_write("启动机器人进程（静默，输出进本面板）……\n")
             self._run_logged(["wscript.exe", str(QQBOT_SILENT_VBS)])
+        self._set_bot_state(True)  # 已发起启动：按钮互斥切换（连接是否恢复看日志滚动）
         self.bot_log_write("启动指令执行完毕，连接是否恢复看上方日志滚动。\n")
 
     def _do_bot_stop(self):
@@ -478,6 +732,7 @@ class App:
         self.bot_log_write("已写停止标志，看门狗不会再自动拉起\n")
         killed = self._kill_bot_pythons()
         self.bot_log_write(f"已结束 {killed} 个机器人进程；NapCat/QQ 未动。\n")
+        self._set_bot_state(False)
 
     def _do_bot_panel(self):
         """打开 qqbot 状态面板（独立控制台窗口，纯展示；关窗只收起展示，不影响机器人进程）。"""
@@ -580,17 +835,22 @@ class App:
     # ── 按钮切换 ──
 
     def toggle_action(self, action: str):
-        if self.current_action == action:
-            # 正在运行 → 停止
-            self.stop_process()
-        else:
-            # 空闲 → 启动
+        # 运行中三个任务按钮都已置灰，理论到不了这里；兜底忽略
+        if self.current_action is None:
             if action == "download":
                 self.start_download()
             elif action == "jandan":
                 self.start_jandan()
             else:
                 self.start_upload()
+
+    def _set_task_buttons(self, running: bool):
+        """任务运行中：三个任务按钮+复选框置灰，停止按钮红色高亮；空闲恢复。"""
+        state = tk.DISABLED if running else tk.NORMAL
+        for btn in (self.dl_btn, self.jd_btn, self.ul_btn):
+            btn.config(state=state)
+        self.clean_cache_cb.config(state=state)
+        self.stop_btn.config(state=tk.NORMAL if running else tk.DISABLED)
 
     def _kill_tree(self):
         """强制终止进程树（包括 tdl 等孙进程）"""
@@ -613,34 +873,24 @@ class App:
                     pass
                 running_process = None
 
-    def _set_action_buttons(self, running: str | None):
-        """统一设置三个动作按钮文案/状态：running 项显示「停止」，其余恢复可用"""
-        texts = {"download": "⬇ TG下载", "jandan": "🥚 煎蛋下载", "upload": "⬆ 统一上传"}
-        for key, btn in (("download", self.dl_btn), ("jandan", self.jd_btn), ("upload", self.ul_btn)):
-            btn.config(text="⏹ 停止" if running == key else texts[key], state=tk.NORMAL)
-
     def stop_process(self):
+        if self.current_action is None:
+            return
         self._kill_tree()
         self.log_write("\n⏹ 已手动停止\n")
-        self.current_action = None
-        self._set_action_buttons(None)
+        self._task_finish(ok=False, stopped=True)
 
     # ── 运行子进程 ──
 
     def run_subprocess(self, cmd: list[str], desc: str, action: str):
         global running_process
-        self.log_write(f"{'=' * 50}\n")
-        self.log_write(f"{desc}\n")
-        self.log_write(f"{' '.join(cmd)}\n")
-        self.log_write(f"{'=' * 50}\n")
+        self.log_write(f"{'=' * 50}\n{desc}\n{' '.join(cmd)}\n{'=' * 50}\n")
+        self._raw_write(f"===== {desc}\n$ {' '.join(cmd)}\n")
 
-        # 切换按钮状态：当前项变「停止」，其余禁用（同时只跑一个）
+        # 运行中：三个任务按钮全置灰，独立「停止」接管（红色高亮）
         self.current_action = action
-        for key, btn in (("download", self.dl_btn), ("jandan", self.jd_btn), ("upload", self.ul_btn)):
-            if key == action:
-                btn.config(text="⏹ 停止", state=tk.NORMAL)
-            else:
-                btn.config(state=tk.DISABLED)
+        self._set_task_buttons(running=True)
+        self._progress_begin(f"{desc}启动…")
 
         def worker():
             global running_process
@@ -665,6 +915,8 @@ class App:
 
                 for line in p.stdout:
                     self.log_write(line)
+                    self._raw_write(line)
+                    self._progress_feed(line)
 
                 p.wait()
 
@@ -672,22 +924,101 @@ class App:
                     if running_process == p:
                         running_process = None
 
-                if p.returncode == 0:
-                    self.log_write(f"\n✓ {desc}完成\n")
-                else:
-                    self.log_write(f"\n✗ {desc}失败 (返回码 {p.returncode})\n")
+                self.root.after(0, lambda: self._task_finish(ok=p.returncode == 0, desc=desc))
             except Exception as e:
                 self.log_write(f"\n✗ 错误: {e}\n")
+                self.root.after(0, lambda: self._task_finish(ok=False, desc=desc))
             finally:
-                self.root.after(0, self.set_buttons_idle)
+                self.root.after(0, self._after_task_refresh)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def set_buttons_idle(self):
-        self.current_action = None
-        self._set_action_buttons(None)
+    def _after_task_refresh(self):
         self.root.after(0, self.refresh_counts)
         self.root.after(0, self.refresh_pending_count)
+
+    # ── 任务进度条 ──
+
+    def _progress_begin(self, text: str):
+        self._progress_total = None
+        self._progress_done_count = 0
+        self.progress_label.config(text=text)
+        self.progress_bar.config(mode="indeterminate", value=0)
+        self.progress_bar.start(12)
+
+    def _progress_feed(self, line: str):
+        """worker 线程里逐行调用；命中进度行后转主线程更新 UI。"""
+        for pat, rule in PROGRESS_RULES:
+            m = pat.search(line)
+            if m:
+                self.root.after(0, self._progress_update, rule, m)
+                return
+
+    def _progress_update(self, rule: str, m: re.Match):
+        if rule == "total":  # tdl：已下载 N 张（预期 M 张）
+            n, total = int(m.group(1)), int(m.group(2))
+            self._progress_total = total
+            self._progress_done_count = n
+            self.progress_bar.stop()
+            self.progress_bar.config(mode="determinate", maximum=max(total, 1), value=min(n, total))
+            self.progress_label.config(text=f"已下载 {n} / {total} 张")
+        elif rule == "count":  # tdl/煎蛋：只知道当前张数
+            self._progress_done_count = int(m.group(1))
+            self.progress_label.config(text=f"已下载 {m.group(1)} 张…")
+        elif rule == "upload_summary":  # uploader 汇总：共 X 张: 新增 a, 重复 b, 跳过 c, 失败 d
+            total, up = int(m.group(1)), int(m.group(2))
+            self.progress_bar.stop()
+            self.progress_bar.config(mode="determinate", maximum=max(total, 1), value=total)
+            self.progress_label.config(
+                text=f"扫描完成 共{total}张（新增{up} 重复{m.group(3)} 跳过{m.group(4)} 失败{m.group(5)}）"
+            )
+        elif rule == "upload":  # uploader：逐张 ✓
+            self._progress_done_count += 1
+            self.progress_label.config(text=f"已上传 {self._progress_done_count} 张…")
+
+    def _progress_end(self, ok: bool, stopped: bool):
+        self.progress_bar.stop()
+        if stopped:
+            self.progress_label.config(text="已停止")
+        elif ok:
+            self.progress_bar.config(mode="determinate", maximum=1, value=1)
+            n = self._progress_done_count
+            self.progress_label.config(text="完成" + (f"（{n} 张）" if n else ""))
+        else:
+            self.progress_label.config(text="失败")
+
+    def _task_finish(self, ok: bool, desc: str = "", stopped: bool = False):
+        """任务收尾（主线程）：按钮恢复 + 进度条定格 + Toast。"""
+        self.current_action = None
+        self._set_task_buttons(running=False)
+        self._progress_end(ok=ok, stopped=stopped)
+        if stopped:
+            self.toast("任务已停止", ok=False)
+        elif desc:
+            self.log_write(f"\n✓ {desc}完成\n" if ok else f"\n✗ {desc}失败\n")
+            self.toast(f"{'✓ ' if ok else '✗ '}{desc}{'完成' if ok else '失败'}", ok=ok)
+
+    # ── 命令行原始输出折叠面板 ──
+
+    def toggle_raw_output(self):
+        if self._raw_visible:
+            self.raw_log.pack_forget()
+            self.raw_toggle_btn.config(text="▶ 命令行原始输出")
+        else:
+            self.raw_log.pack(fill=tk.BOTH, padx=12, pady=(0, 8))
+            self.raw_toggle_btn.config(text="▼ 命令行原始输出")
+        self._raw_visible = not self._raw_visible
+
+    def _raw_write(self, line: str):
+        def apply():
+            self.raw_log.config(state=tk.NORMAL)
+            self.raw_log.insert(tk.END, line)
+            lines = int(self.raw_log.index("end-1c").split(".")[0])
+            if lines > RAW_LOG_MAX_LINES:
+                self.raw_log.delete("1.0", f"{lines - RAW_LOG_MAX_LINES}.0")
+            self.raw_log.see(tk.END)
+            self.raw_log.config(state=tk.DISABLED)
+        self.root.after(0, apply)
 
     # ── 下载 ──
 
