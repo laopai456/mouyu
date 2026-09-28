@@ -2,6 +2,13 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-28 工具面板加「待审核」计数——SCF 直调 admin/getStats，子进程查询不进 exe
+
+- **需求**：GUI 顶部信息栏原本只有 已下载/已上传 两个本地计数，加一个云端「待审核」（images 表 status=0）数量。
+- **改动**：① 新增 `tools/cloud_stats.py`——SCF 直调 admin 云函数 `getStats`（event 带 `adminOpenid`=uploader config 的 developer_openid 走白名单），stdout 只出一行 `CLOUD_STATS_JSON {...}` 标记行便于解析（stderr 混有 SDK warning 不影响）；凭据与 uploader 同源（env TENCENT_SECRET_ID/KEY 优先，其次 config.json cos 段）。② `tools/gui.py`——信息栏加「⏳ 待审核」橙色计数（点击数字立即刷新）；新 `refresh_pending_count()` 用 .venv 子进程异步查询（30s 超时，busy 去重，失败显示 `-` 且只 WARN 一次、恢复时 INFO）；刷新时机=启动+每次任务结束（`set_buttons_idle`）+每 5 分钟，不进 5 秒本地计数轮询（云查询慢且有调用成本）；exe 无 .venv 时静默跳过（该场景启动日志本就有 ERROR）。
+- **验证**：脚本直跑返回真实数 `pending:60, approved:808`；py_compile 过；GUI 冒烟测试（启动 9 秒自动关闭）标签实显 `60`、日志无 WARN。注意：admin 函数 ADMIN_OPENIDS 须含 config.json 的 developer_openid，否则标签显 `-` 且日志 WARN「无权限操作」。
+- **提交**：见 git log（feat(tools) 工具面板待审核计数）。
+
 ## 2026-09-21 新发现：公开频道不加入也能下载——换新号后 5 频道全拉成功，加群从"必需"降级为"可选"
 
 - **发现**：换新号后只加入了 @xinjingdaily 1 个频道（`--check-channels` 实测 1/5），跑 `--auto` 却把其余 4 个未加入频道（woshadiao / shadiao_refuse / wtmsd / xinjingdaily_reject）的图全部正常下载（共 40 张）。结论：tdl 的 `chat export -c 用户名` 解析公开用户名即可拉全量历史，**不需要是频道成员**（同 t.me 网页预览机制，MTProto 允许非成员读公开频道历史）。只有私有频道/群才必须加入。此前脚本和 09-19 WORKLOG 里"换号后需重新加 5 个频道"的说法过时——加群仅为防频道转私/改用户名后失联，非下载前提。

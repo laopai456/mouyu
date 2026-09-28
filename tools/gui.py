@@ -46,6 +46,9 @@ JANDAN_DOWNLOAD_DIR = r"C:\Users\w\Downloads\jandan"
 DOWNLOADER_SCRIPT = BASE_DIR / "tools" / "tdl_downloader" / "tdl_downloader_v2.py"
 UPLOADER_SCRIPT = BASE_DIR / "tools" / "uploader" / "uploader.py"
 JANDAN_SCRIPT = BASE_DIR / "tools" / "jandan" / "jandan_scraper.py"
+CLOUD_STATS_SCRIPT = BASE_DIR / "tools" / "cloud_stats.py"
+# cloud_stats.py 的结果标记行，GUI 只解析该行（stderr 可能混有 SDK 噪音）
+PENDING_JSON_MARK = "CLOUD_STATS_JSON "
 UPLOADER_CACHE = BASE_DIR / "tools" / "uploader" / "cache" / "md5_cache.json"
 DOWNLOADER_CACHE = BASE_DIR / "tools" / "tdl_downloader" / "cache" / "md5_cache.json"
 DOWNLOADER_PROGRESS = BASE_DIR / "tools" / "tdl_downloader" / "cache" / "progress_cache.json"
@@ -142,6 +145,10 @@ class App:
         self.current_action: str | None = None
         # 机器人按钮互斥（启/停/清理 同时只允许一个在跑）
         self._bot_busy = False
+        # 云端待审核数：查询去重 + 5 分钟定时刷新节拍 + 失败只告警一次
+        self._pending_fetching = False
+        self._pending_fail_logged = False
+        self._cloud_tick = 0
 
         # 样式
         style = ttk.Style()
@@ -158,6 +165,14 @@ class App:
         ttk.Label(info_frame, text="📤 已上传:", font=("", 12)).pack(side=tk.LEFT, padx=(0, 4))
         self.ul_count_label = ttk.Label(info_frame, text="0", font=("", 16, "bold"), foreground="#52c41a")
         self.ul_count_label.pack(side=tk.LEFT)
+
+        ttk.Label(info_frame, text="⏳ 待审核:", font=("", 12)).pack(side=tk.LEFT, padx=(20, 4))
+        self.pending_count_label = ttk.Label(
+            info_frame, text="…", font=("", 16, "bold"), foreground="#faad14", cursor="hand2"
+        )
+        self.pending_count_label.pack(side=tk.LEFT)
+        # 点击数字立即刷新（云端查询较慢，不做进 5 秒本地计数轮询）
+        self.pending_count_label.bind("<Button-1>", lambda e: self.refresh_pending_count())
 
         # ─ 按钮区 ─
         btn_frame = ttk.Frame(self.root, padding=(12, 0, 12, 6))
@@ -236,6 +251,7 @@ class App:
 
         # 刷新计数
         self.refresh_counts()
+        self.refresh_pending_count()
 
         # 机器人日志尾随线程（不管 bot 由谁启动，tail bot.log 都能看到）
         threading.Thread(target=self._tail_bot_log, daemon=True).start()
@@ -298,7 +314,61 @@ class App:
     def refresh_counts(self):
         self.dl_count_label.config(text=str(get_download_count()))
         self.ul_count_label.config(text=str(get_upload_count()))
+        self._cloud_tick += 1
+        if self._cloud_tick >= 60:  # 云端待审核数每 5 分钟跟刷一次
+            self._cloud_tick = 0
+            self.refresh_pending_count()
         self.root.after(5000, self.refresh_counts)
+
+    def refresh_pending_count(self):
+        """异步刷新云端待审核数（SCF 查询约 1-2 秒，子进程跑 cloud_stats.py）。"""
+        if self._pending_fetching:
+            return
+        if getattr(sys, 'frozen', False) and VENV_PYTHON == Path(sys.executable):
+            return  # exe 无 .venv 时跑不了查询脚本（启动日志已有 ERROR 提示）
+        self._pending_fetching = True
+
+        def worker():
+            pending = None
+            err = None
+            try:
+                env = os.environ.copy()
+                env["PYTHONIOENCODING"] = "utf-8"
+                _NO_WIN = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+                r = subprocess.run(
+                    [str(VENV_PYTHON), str(CLOUD_STATS_SCRIPT)],
+                    capture_output=True, timeout=30, encoding="utf-8",
+                    errors="replace", env=env, creationflags=_NO_WIN,
+                )
+                for line in reversed((r.stdout or "").splitlines()):
+                    if line.startswith(PENDING_JSON_MARK):
+                        data = json.loads(line[len(PENDING_JSON_MARK):])
+                        if data.get("ok"):
+                            pending = int(data.get("pending", 0))
+                        else:
+                            err = data.get("error", "未知错误")
+                        break
+                if pending is None and err is None:
+                    err = f"无结果输出 (返回码 {r.returncode})"
+            except Exception as e:
+                err = str(e)
+
+            def apply():
+                self._pending_fetching = False
+                if pending is not None:
+                    self.pending_count_label.config(text=str(pending))
+                    if self._pending_fail_logged:
+                        self._pending_fail_logged = False
+                        self.log_write("INFO 待审核数查询已恢复\n")
+                else:
+                    self.pending_count_label.config(text="-")
+                    if not self._pending_fail_logged:
+                        self._pending_fail_logged = True
+                        self.log_write(f"WARN 待审核数查询失败: {err}\n")
+
+            self.root.after(0, apply)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     # ── 机器人日志面板 ──
 
@@ -617,6 +687,7 @@ class App:
         self.current_action = None
         self._set_action_buttons(None)
         self.root.after(0, self.refresh_counts)
+        self.root.after(0, self.refresh_pending_count)
 
     # ── 下载 ──
 
