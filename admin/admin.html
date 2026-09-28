@@ -221,6 +221,43 @@
       overflow: hidden;
       background: #222;
     }
+    /* 悬停复制按钮：右上角，悬停整格时浮现（复制到剪贴板，聊天窗 Ctrl+V 直接发） */
+    .copy-thumb-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 3;
+      width: 34px;
+      height: 34px;
+      border: none;
+      border-radius: 6px;
+      background: rgba(102, 126, 234, 0.92);
+      color: #fff;
+      font-size: 16px;
+      cursor: copy;
+      opacity: 0;
+      transition: opacity 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .batch-review-item:hover .copy-thumb-btn { opacity: 1; }
+    .copy-thumb-btn:hover { background: rgba(102, 126, 234, 1); }
+    /* 轻提示 toast */
+    .toast-tip {
+      position: fixed;
+      bottom: 36px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.78);
+      color: #fff;
+      padding: 10px 18px;
+      border-radius: 6px;
+      font-size: 14px;
+      z-index: 9999;
+      pointer-events: none;
+    }
+    .toast-tip.err { background: rgba(202, 48, 48, 0.92); }
     .batch-review-item img {
       width: 100%;
       display: block;
@@ -791,6 +828,7 @@
         return `
           <div class="batch-review-item">
             <div class="batch-review-checkbox ${stateCls}" onclick="toggleCheckbox('${img._id}')"></div>
+            <button class="copy-thumb-btn" title="复制图片，去聊天窗 Ctrl+V 发送" onclick="copyFromGrid('${img._id}')">📋</button>
             <img src="${url}" onclick="openPreview('${img._id}')" onload="clampLongImage(this)" onerror="console.error('网格图片加载失败:', this.src)" style="background:#eee;">
           </div>
         `;
@@ -803,6 +841,69 @@
       const current = selectedMap.get(imageId) || 0;
       selectedMap.set(imageId, (current + 1) % 3);
       renderBatchGrid();
+    }
+
+    // ── 复制图片到剪贴板（聊天窗 Ctrl+V 直接发）──
+
+    function showToast(msg, isErr = false) {
+      document.querySelectorAll('.toast-tip').forEach(t => t.remove());
+      const t = document.createElement('div');
+      t.className = 'toast-tip' + (isErr ? ' err' : '');
+      t.textContent = msg;
+      document.body.appendChild(t);
+      setTimeout(() => t.remove(), 2200);
+    }
+
+    async function copyImageToClipboard(url) {
+      // 剪贴板位图各应用只通用 image/png，JPG/WebP 需经画布转码
+      const res = await fetch(url, { mode: 'cors' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const srcBlob = await res.blob();
+      if (srcBlob.type === 'image/png') return srcBlob;
+      const bmp = await createImageBitmap(srcBlob);
+      const canvas = document.createElement('canvas');
+      canvas.width = bmp.width;
+      canvas.height = bmp.height;
+      canvas.getContext('2d').drawImage(bmp, 0, 0);
+      bmp.close();
+      return await new Promise((resolve, reject) =>
+        canvas.toBlob(b => b ? resolve(b) : reject(new Error('PNG 转码失败')), 'image/png')
+      );
+    }
+
+    // 复制必须用 getTempUrls 的签名地址：网格展示用的 tcb.qcloud.la 无签名地址不带 CORS 头，
+    // 浏览器 fetch 会被跨域拦掉；签名地址 + Web 安全域名白名单才有 Access-Control-Allow-Origin
+    async function resolveCopyUrl(img) {
+      if (img._copyUrl) return img._copyUrl;
+      const res = await app.callFunction({ name: 'getTempUrls', data: { fileIDs: [img.url] } });
+      const url = res.result && res.result.success && res.result.urlMap && res.result.urlMap[img.url];
+      if (!url) throw new Error('获取临时签名地址失败');
+      img._copyUrl = url;
+      return url;
+    }
+
+    async function doCopyImage(img) {
+      try {
+        const url = await resolveCopyUrl(img);
+        const blob = await copyImageToClipboard(url);
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        showToast('已复制，去聊天窗 Ctrl+V 粘贴发送');
+        return true;
+      } catch (err) {
+        console.error('复制图片失败', err);
+        showToast('复制失败：' + (err.message || '跨域限制'), true);
+        return false;
+      }
+    }
+
+    async function copyFromGrid(imageId) {
+      const img = batchImages.find(i => i._id === imageId);
+      if (img) await doCopyImage(img);
+    }
+
+    async function copyFromPreview() {
+      const current = previewImages[previewIndex];
+      if (current) await doCopyImage(current);
     }
 
     // 长图截断：高 > 宽×1.8 时，在 宽×1.8 处截断（cover 居中裁切上下），点击放大看全
@@ -1285,16 +1386,8 @@
       modalImg.src = displayUrl;
       modalInfo.textContent = `${previewIndex + 1} / ${previewImages.length} | 🌸 ${current.likeCount || 0} | 💩 ${current.dislikeCount || 0}`;
 
-      let actionsHtml = '';
-      if (status === 0) {
-        actionsHtml = `
-          <button class="btn btn-success" onclick="reviewFromPreview(1)">通过</button>
-          <button class="btn btn-danger" onclick="reviewFromPreview(2)">拒绝</button>
-        `;
-      } else {
-        actionsHtml = `<button class="btn btn-danger" onclick="deleteFromPreview()">删除</button>`;
-      }
-      modalActions.innerHTML = actionsHtml;
+      // 审核走网格勾选/批量流程，弹窗只留「复制图片」（原通过/拒绝/删除按钮使用率低，已移除）
+      modalActions.innerHTML = `<button class="btn btn-primary" onclick="copyFromPreview()">📋 复制图片</button>`;
 
       resetModalZoom();
       modal.style.display = 'block';

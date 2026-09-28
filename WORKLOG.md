@@ -2,6 +2,15 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-09-28 审核页加「复制图片」（弹窗+网格悬停），移除预览弹窗审核按钮；两项云配置打通跨域
+
+- **需求**：① 预览弹窗里的 通过/拒绝/删除 按钮使用率低 → 移除；② 加「复制图片」到剪贴板（聊天窗 Ctrl+V 直接发，替代不可行的浏览器拖拽到外部应用）。
+- **改动**（`admin/admin.html`）：① updatePreviewModal 的 actions 只留「📋 复制图片」（reviewFromPreview/deleteFromPreview 函数保留未删，后续键盘审核流可复用）；② 网格每格右上角加悬停浮现的 📋 复制小按钮；③ 复制链路：getTempUrls 拿签名地址 → fetch → 非 PNG 经 canvas 转码 → navigator.clipboard.write；加 showToast 轻提示（成功/失败文案）。**关键坑**：网格展示用的 `tcb.qcloud.la` 无签名地址不带 CORS 头，fetch 必挂——复制必须走 getTempUrls 的签名地址（结果按 fileID 缓存在 `img._copyUrl`）。
+- **云配置**（均增量可逆，控制台可见）：① COS 桶 `636c-cloudbase-8gfl3w4b18e46282-1414730090` 加 CORS 规则 `admin-copy-image`（GET/HEAD，Origin 限 localhost:9000 与托管域名）——实际验证 COS 直连域名生效，但 tcb 默认域名不走桶 CORS；② **Web 安全域名**加 `localhost:9000`（CreateAuthDomain API，写法须不带协议头）——tcb.qcloud.la 的 CORS 头按这份白名单发，这是打通的真正关键。
+- **验证**：browser-use 全链路实测——签名地址 fetch 200（CORS ✓）→ JPEG 转 PNG ✓ → 真实点击网格复制按钮 toast「已复制，去聊天窗 Ctrl+V 粘贴发送」✓ 零报错；弹窗 actions 仅剩复制按钮，缩放/翻图完好（截图目检）。node --check 内联 JS 过。
+- **注意**：托管版（tcloudbaseapp.com）要用此功能需把 admin.html 重新传云端静态托管（同 09-16 备注）；白名单已含托管域名，其上可直接用。
+- **提交**：见 git log（feat(admin) 复制图片+移除弹窗审核按钮）。
+
 ## 2026-09-28 GUI 一期 UI 优化落地（P0 全部 + P1 全部）——按钮互斥/日志高亮/进度条/折叠面板/Toast
 
 - **需求**：按用户交付的《UI 优化方案》落地，P0（按钮分组+互斥置灰、日志关键字高亮、拖动分割线、进度条）+ P1（右键菜单、hover 提示、命令行折叠面板、完成 Toast）全做；P2（过滤下拉/行号/主题切换/托盘/任务队列）按方案留二期。仅改 `tools/gui.py`。
