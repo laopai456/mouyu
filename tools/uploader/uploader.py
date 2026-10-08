@@ -302,38 +302,59 @@ class ImageUploader:
             }
     
     def write_to_database(self, file_id, md5):
-        try:
-            now = datetime.now()
-            today = now.strftime('%Y-%m-%d')
-            year_month = f"{now.year}-{str(now.month).zfill(2)}"
-            month = now.month
-            
-            event_data = {
-                'action': 'addImage',
-                'fileID': file_id,
-                'md5': md5,
-                'date': today,
-                'yearMonth': year_month,
-                'month': month
-            }
-            
-            req = models.InvokeRequest()
-            req.FunctionName = 'autoUpload'
-            req.Namespace = self.env_id
-            req.ClientContext = json.dumps(event_data, ensure_ascii=False)
-            
-            resp = self.scf_client.Invoke(req)
-            ret_msg = json.loads(resp.Result.RetMsg)
-            
-            if ret_msg.get('success'):
+        now = datetime.now()
+        today = now.strftime('%Y-%m-%d')
+        year_month = f"{now.year}-{str(now.month).zfill(2)}"
+        month = now.month
+
+        event_data = {
+            'action': 'addImage',
+            'fileID': file_id,
+            'md5': md5,
+            'date': today,
+            'yearMonth': year_month,
+            'month': month
+        }
+
+        req = models.InvokeRequest()
+        req.FunctionName = 'autoUpload'
+        req.Namespace = self.env_id
+        req.ClientContext = json.dumps(event_data, ensure_ascii=False)
+
+        # 瞬时抖动（函数超时/网络抖）自动重试 2 次自愈；业务性失败（已存在/永久拒绝）不重试
+        delays = (2, 5)
+        result = {'success': False, 'message': '未知错误'}
+        for attempt in range(3):
+            if attempt:
+                time.sleep(delays[attempt - 1])
+            try:
+                resp = self.scf_client.Invoke(req)
+                raw = resp.Result.RetMsg
+            except Exception as e:
+                result = {'success': False, 'message': str(e)}
+                self.logger.warning(f"云函数调用异常(第{attempt + 1}次): {e}")
+                continue
+
+            ret_msg = None
+            try:
+                ret_msg = json.loads(raw)
+            except (TypeError, ValueError):
+                pass
+
+            if isinstance(ret_msg, dict) and ret_msg.get('success'):
                 return {'success': True}
-            else:
-                self.logger.error(f"云函数调用失败: {ret_msg.get('msg', '未知错误')}")
-                return {'success': False, 'message': ret_msg.get('msg', 'Unknown error')}
-            
-        except Exception as e:
-            self.logger.error(f"写入数据库异常: {str(e)}")
-            return {'success': False, 'message': str(e)}
+
+            msg = ''
+            if isinstance(ret_msg, dict):
+                msg = ret_msg.get('msg') or ret_msg.get('message') or ret_msg.get('errorMessage') or ''
+            if not msg:
+                # 平台层失败（未捕获异常/超时/OOM）没有 msg/message 字段，把原文打进日志便于定位
+                msg = f'未知错误 RetMsg={str(raw)[:300]}'
+            result = {'success': False, 'message': msg}
+            self.logger.error(f"云函数调用失败(第{attempt + 1}次): {msg}")
+            if '已存在' in msg or '永久拒绝' in msg:
+                break
+        return result
 
     def check_md5_on_server(self, md5):
         """上传前服务端查重。返回 {'duplicate', 'blacklisted'}；查询本身失败则放行，由 addImage 阶段兜底。"""
@@ -346,10 +367,20 @@ class ImageUploader:
             req.ClientContext = json.dumps(event_data, ensure_ascii=False)
 
             resp = self.scf_client.Invoke(req)
-            ret_msg = json.loads(resp.Result.RetMsg)
+            raw = resp.Result.RetMsg
+            ret_msg = None
+            try:
+                ret_msg = json.loads(raw)
+            except (TypeError, ValueError):
+                pass
 
-            if not ret_msg.get('success'):
-                self.logger.warning(f"服务端查重调用失败，按正常流程继续: {ret_msg.get('message', '未知错误')}")
+            if not (isinstance(ret_msg, dict) and ret_msg.get('success')):
+                msg = ''
+                if isinstance(ret_msg, dict):
+                    msg = ret_msg.get('message') or ret_msg.get('errorMessage') or ''
+                if not msg:
+                    msg = f'未知错误 RetMsg={str(raw)[:300]}'
+                self.logger.warning(f"服务端查重调用失败，按正常流程继续: {msg}")
                 return {'duplicate': False, 'blacklisted': False}
 
             return {
