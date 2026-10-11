@@ -51,6 +51,7 @@
 
 1. **两个小程序同一主体**（同一微信号注册）。云开发「环境共享」仅支持同主体。确认方式：微信公众平台→账号信息，两个 appid 的主体一致。
    **追注（2026-08-30）**：环境共享只影响**小程序端**。qqbot（HTTP gateway 直连）和 admin（web SDK 匿名登录）不经过小程序端链路，**不同主体也能迁**——那种情况下小程序展示功能退役，转发群组 + 审核上传链路照常存活。
+   **追注（2026-10-10 晚，路线重构）**：「配置环境」弹窗实测——共享环境下拉里**没有 movie-api**（只有 cloud1）→ 体验版环境**疑似不能作共享资源方**（须付费套餐，待官方文档证实）。同时用户口述 cloud1（july 业务正主）可能 ~2026-11 到期。路线收敛：① **july 业务到期直接搬自有 movie-api**（同 appid 免共享直部，用至 2027-04-10）——本文件的跨 appid 共享方案**整份搁置**；② **mouyu 路线二选一**：自开体验版环境（待实测 mouyu 控制台新建环境入口；movie-api 的存在证明该入口曾对个人主体开放）→ 方案按同 appid 直部复活；或续费旧环境（0元活动→19.9）。③ 反向移植（mouyu 续费后 july 业务迁入）已评估不推荐：users 撞名 + 双业务抢配额 + july 侧发版，工作量大于 july 搬自有环境。
 2. july 环境套餐**未到期**且容量/调用配额足够（mouyu 数据量级：images <1000 条、桶内对象 <1000 个，量很小）。
 3. 腾讯云密钥（`tools/uploader/config.json` 里那对 SecretId/Key）具备权限：COS（两桶读写）、TCB（云开发数据库 admin 读写）。若密钥权限不足 → 用 §9 Plan B（控制台手动导）。
 4. 旧环境到期日已知，且距执行日 **≥7 天**（留验证+回滚窗口）。
@@ -137,14 +138,21 @@ node 03_import.js                # 实际写入：保留原 _id，逐条 add；�
 | `tools/gui.py` + `tools/tdl_downloader/tdl_downloader_v2.py` | `ADMIN_URL` 若保留托管回退，改 july 托管地址；本地 admin 优先不受影响 |
 | `.github/workflows/daily-job.yml` | 已停用；若重启需同步 env/桶（scripts/*.js 引用已失效，本方案不处理） |
 
-### 5.2 部署（微信开发者工具，打开 mouyu 项目）
+**追注（2026-10-10 定稿，目标环境=`movie-api-4gzdkdr3c6721d7b`，实测为空环境）**：
+- 目标环境从未使用（july 业务实际跑在 `cloud1-5gl9tqz7860b840c`，两环境隔离）→ **上表所有集合改名取消**（无 users 冲突，原名部署）；本表及 §6/§7 中出现的 `mouyu_images` 等前缀名一律按原名（`images` 等）理解；
+- 实际代码改动缩为 5 处：① `cloudfunctions/cosUploadHandler/index.js` 的 fileID env 模板；② `admin/admin.html` 的 ENV_ID；③ `tools/uploader/config.json`（env_id + movie-api 桶名）；④ qqbot `.env.prod` 的 MOYU_ENV_ID；⑤ 小程序 `app.js` 的 env；
+- **部署端修正**：云函数部署要求环境属于同一 appid，mouyu 项目（`wx937475f79b3690fe`）**无法**向 july 名下的环境部署函数 → 13 个函数须拷入 **july 的开发者工具项目** 再部署（见 §5.2）。
 
-1. 云函数目录 13 个函数右键「上传并部署：云端安装依赖」→ **部署时选择 july 环境**（工具右上角环境切换）；
-2. **定时触发器**：`autoCleanup` / `autoUpload` 若配置过定时触发器（旧环境的配置不随代码迁移），到 july 环境「云函数→触发器」按原 cron 重建。原配置在旧环境控制台抄；
-3. **COS 触发器**：COS 控制台 → 目标桶 → 事件通知 → 函数处理，新增：事件 `cos:ObjectCreated:*`、前缀 `memes/`、函数选 `cosUploadHandler`（命名空间=云函数所在地域）；
-4. **环境共享**：july 云开发控制台 → 环境→共享/成员管理 → 把 mouyu 的 appid `touristappid` 加为共享成员（同主体才可见）；
-5. **匿名登录**：july 环境→登录授权→启用「匿名登录」（qqbot 的 gateway 匿名登录和 admin.html 网页 SDK 都依赖它）；
-6. （可选）july 环境→静态托管：上传 `admin/admin.html`，得新托管地址替换工具里的回退 URL。
+### 5.2 部署（2026-10-10 修正：**在 july 的开发者工具项目里操作**——函数部署要求环境属于同一 appid，mouyu 项目无法向 july 环境部署）
+
+1. 把 mouyu 仓库 `cloudfunctions/` 下全部 13 个函数目录拷进 july 项目的 `cloudfunctions/`（july 原有 10 个函数不重名，直接并存）；july 项目 DevTools 右上角环境切到 **movie-api-4gzdkdr3c6721d7b**；
+2. 13 个函数逐个右键「上传并部署：云端安装依赖」；
+3. **定时触发器**：旧环境配过的定时触发器（autoCleanup / autoUpload 等，触发器不随代码迁移）到 movie-api「云函数→触发器」按原 cron 重建，原配置在旧环境控制台抄；
+4. **COS 触发器**：若腾讯云 API/控制台能摸到 movie-api 的存储桶（微信侧体验版，待实测），COS 控制台→目标桶→事件通知：事件 `cos:ObjectCreated:*`、前缀 `memes/`、函数 `cosUploadHandler`；摸不到 → 上传链路在 Phase 6 工具链环节改走云函数，实测再定；
+5. **环境共享**：✅ 2026-10-10 已把木偶鱼PF（`wx937475f79b3690fe`）加为共享对象——仅剩「配置环境」把授权环境从 cloud1 **改指 movie-api**，权限全勾（云函数/数据库/云存储）；
+6. **匿名登录**：movie-api 环境→登录授权→启用「匿名登录」（qqbot gateway 与 admin.html 网页 SDK 都依赖它）；
+7. **Web 安全域名**：movie-api 环境→设置→安全配置→Web 安全域名加 `localhost:9000`（照抄旧环境那份清单，含托管域名）；
+8. （可选）movie-api 静态托管上传 `admin/admin.html`，得新托管地址替换工具回退 URL。
 
 ## 6. Phase 5 客户端切换（顺序执行，每步验完再下一步）
 
