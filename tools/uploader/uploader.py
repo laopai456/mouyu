@@ -256,6 +256,12 @@ class ImageUploader:
                 if '已存在' in fail_msg or '永久拒绝' in fail_msg:
                     # 服务端查重兜底（checkMd5 之后才被其他通道抢先入库的竞态）：同样删文件+记缓存，防止下轮重复撞
                     self.logger.info(f"重复图片(服务端拒绝)，删除本地文件: {file_path}")
+                    # 服务端已确认无记录引用该内容，桶里刚传的那份是孤儿，同步清掉防堆积
+                    try:
+                        if self.cos_client and self.bucket:
+                            self.cos_client.delete_object(Bucket=self.bucket, Key=cloud_path)
+                    except Exception as e:
+                        self.logger.warning(f"清理COS孤儿文件失败(留给定期清扫): {cloud_path} - {e}")
                     self.md5_cache[md5] = {
                         'file_id': None,
                         'upload_time': now.isoformat(),
