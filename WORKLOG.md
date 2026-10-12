@@ -2,6 +2,14 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-10-12 审核新规则：拒绝即删除，移除 admin 已拒绝入口
+
+- **需求**：admin 的「已拒绝」不再需要，不通过的图直接删（规则级改动）。
+- **改动**：① `cloudfunctions/admin/index.js` review action status=2 分支：md5 进黑名单（原逻辑保留，防重传）→ **新增删存储文件（cloud.deleteFile）+ 删记录**，不再 update status=2；status=1/3 过审/转发路径不变。② `cloudfunctions/deleteImages/index.js`：`delete`/`batchDelete`/`deleteByMonth` 全部补删桶文件（batchDelete 先 `where _id in` 取 fileID → deleteFile 每 50 一批 → 再删记录，堵孤儿——10-11 刚清完 16.5GB 孤儿，不能再造）；`migrateBlacklist` 升级为「遗留已拒绝清存量」兜底（循环清空 status=2：补黑名单+删文件+删记录，CAP 5000），存量已拒绝实测 **0 条**（getStats：67 待审核/823 已通过），本次无需跑。③ `admin/admin.html`：删已拒绝统计卡/tab/面板/loadStats 查询/switchTab+reloadAll 分支/loadImages 的 status=2 模板与「加入黑名单」按钮/batchAddToBlacklist 函数，按月删除卡片和文案去掉已拒绝；待审核列表「拒绝」按钮保留（点了即删）。④ 小程序 `pages/admin`（app.json 注册中）：wxml 删已拒绝 tab+状态分支，admin.js statusMap 砍成 [0,1]；reject() 走同一云函数自动继承新规则。⑤ 文档：CLAUDE.md（=AGENTS.md 软链）/README/API.md 状态机改为 {0,1,3}+拒绝即删除说明。
+- **验证**：node --check 两个云函数 + pages/admin/admin.js + admin.html 内联 JS（抽出 script 块）全过；grep 清点 admin.html/pages-admin 无 rejected 残留；`python tools/cloud_stats.py` SCF 直调 getStats 实测通（顺带确认存量已拒绝=0）。
+- **待办（部署才生效）**：微信开发者工具**重新上传 `admin` 和 `deleteImages` 两个云函数**；admin.html 刷新即用（托管版需重传静态托管）；小程序 pages/admin 随下次发版，旧版不影响（tab 显示空列表）。autoCleanup 的 status=2 优先级、admin getStats/getList 的 rejected 字段保留为遗留兼容，未动。
+- **提交**：见 git log。
+
 ## 2026-10-11（晚）qqbot 滴灌挑图加每群扫描游标——调用次数大头压降
 
 - **起因**：调用次数分布图定位：数据库请求占 70%（~5k/天），来源=qqbot `mouyu_forward` 滴灌每 300s 一轮、每群从窗口第一页重扫挑未发图（发得越多扫得越深）。安全线 6.6k/天（20万÷30），实际 ~7k 擦线超标。另：mouyu 已续费至 2027-10-14（API 核实，commit c7147b9），迁移方案休眠。

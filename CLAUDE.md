@@ -16,10 +16,10 @@
 - 自动上传：`pip install -r tools/uploader/requirements.txt && python tools/uploader/uploader.py`
 
 ## 关键约定（改云函数/数据时必看）
-- **图片状态机**：status ∈ {0:待审核, 1:已通过, 2:已拒绝, 3:转发群组}。getRandomImage 只返 status=1，时间窗口按 `reviewTime` 判断（首次访问可看全部，后续只看 7 天内 reviewTime）。
+- **图片状态机**：status ∈ {0:待审核, 1:已通过, 3:转发群组}。getRandomImage 只返 status=1，时间窗口按 `reviewTime` 判断（首次访问可看全部，后续只看 7 天内 reviewTime）。**审核不通过=直接删除**（md5 进黑名单 + 删存储文件 + 删记录，2026-10 起），不再保留 status=2 已拒绝（存量由 deleteImages `migrateBlacklist` 一次性清）。
 - **哈哈权重**：`laughCount` 越高展示概率越大（权重 = laughCount + 1，上限 15 次有效）。
 - **云数据库 where() 链式 bug**：多条件 where 可能丢条件 → 改用内存过滤（先 where status，再 filter reviewTime）。
-- **autoCleanup**：满 2000 张删 200 张，优先删 status=2，不够再删 status=0，按 createTime 倒序。
+- **autoCleanup**：满 2000 张删 200 张，优先删 status=2（遗留兼容，新规则已无此状态），不够再删 status=0，按 createTime 倒序。
 - **monthlyCleanup**：每月3号凌晨3点删「上上个月」及更早（`yearMonth <= 当前月-2` 累积式，保留当前月+上个月），**豁免 status=3 转发群组**（qqbot 滴灌池）；真删需 ADMIN_OPENIDS 白名单（缺省空=拒绝，fail-safe），`dryRun` 只统计不删、免白名单。
 - **weeklyGroupCleanup**：每周一凌晨3点清转发群组图（仅 status=3）：删 `createTime` 早于上周周一 00:00（北京时间）的，累积式=「上上周」及更早，保留当前周+上周；白名单/dryRun 规则同 monthlyCleanup。腾讯 cron 星期域 **0=周日、1=周一**（`0 0 3 * * 1 *`），别按 Quartz 的 1=周日 写。
 - **代码包排除**：`tools/ docs/ admin/ .trae/ *.py *.md .venv/` 不进小程序包（~300KB）。

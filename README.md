@@ -96,7 +96,7 @@ mouyu/
 | url | string | 图片CDN地址 |
 | md5 | string | 图片MD5值（去重用） |
 | uploaderOpenid | string | 上传者openid |
-| status | number | 0待审核/1已通过/2已拒绝 |
+| status | number | 0待审核/1已通过（2已拒绝已废弃：不通过直接删除） |
 | dislikeCount | number | 被踩次数 |
 | likeCount | number | 被送花次数 |
 | laughCount | number | 被哈哈次数（权重） |
@@ -146,7 +146,7 @@ mouyu/
 
 - 触发条件：图片总数满 2000 张
 - 删除数量：每次删除 200 张
-- 删除优先级：先删已拒绝(status=2)，不够再删待审核(status=0)
+- 删除优先级：先删已拒绝(status=2，遗留兼容/存量已清)，不够再删待审核(status=0)
 - 排序方式：按 createTime 倒序
 
 **按月清理（monthlyCleanup）**：每月3号凌晨3点，删除「上上个月」及更早的图片（按 yearMonth 累积式，保留当前月+上个月；豁免转发群组 status=3；云存储文件一并删除）。测试：DevTools 控制台传 `{"dryRun": true}` 只统计不删（免白名单，部署后即可跑）。正式手动执行需两步：云开发控制台给 monthlyCleanup 配环境变量 `ADMIN_OPENIDS`（逗号分隔 openid），测试事件带 `{"adminOpenid": "<白名单openid>"}`。

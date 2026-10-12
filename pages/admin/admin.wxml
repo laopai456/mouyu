@@ -8,7 +8,6 @@
   <view class="tabs" wx:if="{{isAdmin}}">
     <view class="tab {{currentTab === 0 ? 'active' : ''}}" bindtap="switchTab" data-tab="0">待审核 ({{pendingCount}})</view>
     <view class="tab {{currentTab === 1 ? 'active' : ''}}" bindtap="switchTab" data-tab="1">已通过</view>
-    <view class="tab {{currentTab === 2 ? 'active' : ''}}" bindtap="switchTab" data-tab="2">已拒绝</view>
   </view>
 
   <block wx:if="{{currentTab === 0 && isAdmin}}">
@@ -36,9 +35,6 @@
           <text class="time">{{item.createTimeStr}}</text>
           <view class="status" wx:if="{{currentTab === 1}}">
             <text class="approved">已通过</text>
-          </view>
-          <view class="status" wx:elif="{{currentTab === 2}}">
-            <text class="rejected">已拒绝</text>
           </view>
         </view>
       </view>

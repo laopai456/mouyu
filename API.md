@@ -205,7 +205,7 @@ wx.cloud.callFunction({
 {
   action: 'checkAdmin' | 'review' | 'stats',
   imageId?: string,    // 审核时使用
-  status?: number,      // 审核状态 1通过 2拒绝
+  status?: number,      // 审核状态 1通过 2拒绝（拒绝=直接删除记录+存储文件，md5 进黑名单）
   adminOpenid?: string // 可选，传递管理员openid
 }
 ```
@@ -354,7 +354,7 @@ wx.cloud.callFunction({
 | url | string | 图片CDN地址 |
 | md5 | string | 图片MD5 |
 | uploaderOpenid | string | 上传者openid |
-| status | number | 0待审核/1已通过/2已拒绝 |
+| status | number | 0待审核/1已通过（2已拒绝已废弃：不通过直接删除） |
 | dislikeCount | number | 被踩次数 |
 | likeCount | number | 被送花次数 |
 | laughCount | number | 被哈哈次数 |

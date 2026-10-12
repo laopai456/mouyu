@@ -63,7 +63,8 @@ Page({
   async loadImages() {
     if (!this.data.isAdmin) return;
     
-    const statusMap = [0, 1, 2];
+    // 拒绝即删除（云函数侧删记录+文件），不再有已拒绝列表
+    const statusMap = [0, 1];
     const status = statusMap[this.data.currentTab];
 
     try {
