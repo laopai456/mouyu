@@ -2,6 +2,15 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-10-12（修订）云函数保持原样，已拒绝只从前端拿掉
+
+- **用户反馈**：不用修改云函数（免去部署），只从 admin 页面拿掉已拒绝。
+- **改动**：① `git checkout d00681e --` 回滚 `cloudfunctions/admin` + `deleteImages` 到改动前（=线上版本，**无需部署**；上一条的删桶文件/migrateBlacklist 升级一并撤掉，日后要做再单独立项）；② admin.html 待审核列表「拒绝」按钮 `reviewImage(id,2)` 改为新增 `rejectImage()` → deleteImages `addToBlacklist`（**已部署动作**：md5 黑名单+删记录，原「拒绝」语义，零云函数改动）；③ 小程序 `pages/admin` reject() 同样改道 addToBlacklist；④ 文档改为如实描述：status=2 仍在云函数里但已无调用方无视图（autoCleanup 仍优先清它兜底）。
+- **保留**（上一条）：admin.html 已拒绝统计卡/tab/面板/加入黑名单按钮移除、pages/admin 已拒绝 tab 移除、按月删除文案更新。
+- **验证**：node --check（admin 内联 JS + pages/admin/admin.js + 回滚后云函数）全过；grep 确认前后端无 review(status=2) 调用残留；deleteImages 的 addToBlacklist 动作在位。
+- **注意**：已发布小程序旧版在下次发版前，pages/admin 的拒绝仍调 review status=2 写不可见记录（量级=手动拒绝次数，autoCleanup 满仓时优先清，无害）；桶文件两种路径都留在原处，靠 orphan_cleanup 定期清扫（既有月度流程）。
+- **提交**：见 git log。
+
 ## 2026-10-12 审核新规则：拒绝即删除，移除 admin 已拒绝入口
 
 - **需求**：admin 的「已拒绝」不再需要，不通过的图直接删（规则级改动）。

@@ -1124,7 +1124,7 @@
                 ${status === 0 ? `
                   <div class="actions">
                     <button class="btn btn-success" onclick="reviewImage('${item.id}', 1)">通过</button>
-                    <button class="btn btn-danger" onclick="reviewImage('${item.id}', 2)">拒绝</button>
+                    <button class="btn btn-danger" onclick="rejectImage('${item.id}', ${status})">拒绝</button>
                   </div>
                 ` : status === 3 ? `
                   <div class="actions">
@@ -1197,13 +1197,34 @@
             adminOpenid: currentUser.openid
           }
         });
-        
+
         if (result.result && result.result.success) {
           loadImages(status);
           loadStats();
         }
       } catch (err) {
         console.error('删除失败', err);
+      }
+    }
+
+    // 拒绝=md5黑名单+删记录，走已部署的 addToBlacklist（云函数零改动）
+    async function rejectImage(imageId, status) {
+      try {
+        const result = await app.callFunction({
+          name: 'deleteImages',
+          data: {
+            action: 'addToBlacklist',
+            imageIds: [imageId],
+            adminOpenid: currentUser.openid
+          }
+        });
+
+        if (result.result && result.result.success) {
+          loadImages(status);
+          loadStats();
+        }
+      } catch (err) {
+        console.error('拒绝失败', err);
       }
     }
     

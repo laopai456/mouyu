@@ -91,34 +91,20 @@ exports.main = async (event, context) => {
       const imageRes = await db.collection('images').doc(imageId).get();
       const image = imageRes.data;
 
-      // 拒绝=直接删除：md5 进黑名单（防重传），存储文件和记录一并删掉，不再保留 status=2
-      if (status === 2) {
-        if (image && image.md5) {
-          const existRes = await db.collection('md5_blacklist')
-            .where({ md5: image.md5 })
-            .count();
+      if (status === 2 && image && image.md5) {
+        const existRes = await db.collection('md5_blacklist')
+          .where({ md5: image.md5 })
+          .count();
 
-          if (existRes.total === 0) {
-            await db.collection('md5_blacklist').add({
-              data: {
-                md5: image.md5,
-                createTime: Date.now(),
-                sourceId: imageId
-              }
-            });
-          }
+        if (existRes.total === 0) {
+          await db.collection('md5_blacklist').add({
+            data: {
+              md5: image.md5,
+              createTime: Date.now(),
+              sourceId: imageId
+            }
+          });
         }
-
-        if (image && image.fileID) {
-          try {
-            await cloud.deleteFile({ fileList: [image.fileID] });
-          } catch (fileErr) {
-            console.error('ERROR 删除存储文件失败', imageId, fileErr);
-          }
-        }
-
-        await db.collection('images').doc(imageId).remove();
-        return { success: true };
       }
 
       await db.collection('images').doc(imageId).update({

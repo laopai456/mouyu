@@ -96,7 +96,7 @@ mouyu/
 | url | string | 图片CDN地址 |
 | md5 | string | 图片MD5值（去重用） |
 | uploaderOpenid | string | 上传者openid |
-| status | number | 0待审核/1已通过（2已拒绝已废弃：不通过直接删除） |
+| status | number | 0待审核/1已通过（2已拒绝已废弃：页面不再展示，拒绝=黑名单+删记录） |
 | dislikeCount | number | 被踩次数 |
 | likeCount | number | 被送花次数 |
 | laughCount | number | 被哈哈次数（权重） |

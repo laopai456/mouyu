@@ -164,9 +164,10 @@ Page({
 
     const imageId = this.data.currentImage._id;
     try {
+      // 拒绝=md5黑名单+删记录，走已部署的 addToBlacklist（云函数零改动）
       await wx.cloud.callFunction({
-        name: 'admin',
-        data: { action: 'review', imageId, status: 2 }
+        name: 'deleteImages',
+        data: { action: 'addToBlacklist', imageIds: [imageId] }
       });
       wx.showToast({ title: '已拒绝', icon: 'success' });
 
