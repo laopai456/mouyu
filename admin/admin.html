@@ -243,6 +243,9 @@
     }
     .batch-review-item:hover .copy-thumb-btn { opacity: 1; }
     .copy-thumb-btn:hover { background: rgba(102, 126, 234, 1); }
+    /* 下载按钮与复制并排（其左），存到浏览器下载目录 */
+    .copy-thumb-btn.dl-thumb-btn { right: 50px; cursor: download; background: rgba(82, 196, 26, 0.92); }
+    .copy-thumb-btn.dl-thumb-btn:hover { background: rgba(82, 196, 26, 1); }
     /* 轻提示 toast */
     .toast-tip {
       position: fixed;
@@ -814,6 +817,7 @@
         return `
           <div class="batch-review-item">
             <div class="batch-review-checkbox ${stateCls}" onclick="toggleCheckbox('${img._id}')"></div>
+            <button class="copy-thumb-btn dl-thumb-btn" title="下载到本地（浏览器下载目录）" onclick="downloadFromGrid('${img._id}')">📥</button>
             <button class="copy-thumb-btn" title="复制图片，去聊天窗 Ctrl+V 发送" onclick="copyFromGrid('${img._id}')">📋</button>
             <img src="${url}" onclick="openPreview('${img._id}')" onload="clampLongImage(this)" onerror="console.error('网格图片加载失败:', this.src)" style="background:#eee;">
           </div>
@@ -861,8 +865,9 @@
     // 浏览器 fetch 会被跨域拦掉；签名地址 + Web 安全域名白名单才有 Access-Control-Allow-Origin
     async function resolveCopyUrl(img) {
       if (img._copyUrl) return img._copyUrl;
-      const res = await app.callFunction({ name: 'getTempUrls', data: { fileIDs: [img.url] } });
-      const url = res.result && res.result.success && res.result.urlMap && res.result.urlMap[img.url];
+      const fid = img.fileID || img.url;
+      const res = await app.callFunction({ name: 'getTempUrls', data: { fileIDs: [fid] } });
+      const url = res.result && res.result.success && res.result.urlMap && res.result.urlMap[fid];
       if (!url) throw new Error('获取临时签名地址失败');
       img._copyUrl = url;
       return url;
@@ -890,6 +895,72 @@
     async function copyFromPreview() {
       const current = previewImages[previewIndex];
       if (current) await doCopyImage(current);
+    }
+
+    // ── 下载图片到本地（存到浏览器下载目录；要默认落桌面，在浏览器下载设置里把位置改为桌面即可）──
+
+    function buildDownloadName(img, mime) {
+      const m = String(img.fileID || img.url || '').match(/\.(jpe?g|png|gif|webp|bmp)(\?|$)/i);
+      const extMap = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/bmp': 'bmp' };
+      const ext = m ? m[1].toLowerCase() : (extMap[mime] || 'jpg');
+      const d = img.createTime ? new Date(img.createTime) : new Date();
+      const day = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+      const idTail = String(img._id || img.id || '').slice(-6);
+      return `mouyu_${day}_${idTail}.${ext}`;
+    }
+
+    async function doDownloadImage(img, quiet = false) {
+      try {
+        const url = await resolveCopyUrl(img);
+        const res = await fetch(url, { mode: 'cors' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const blob = await res.blob();
+        const a = document.createElement('a');
+        const objUrl = URL.createObjectURL(blob);
+        a.href = objUrl;
+        a.download = buildDownloadName(img, blob.type);
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(objUrl), 3000);
+        if (!quiet) showToast('已开始下载：' + a.download);
+        return true;
+      } catch (err) {
+        console.error('下载图片失败', err);
+        showToast('下载失败：' + (err.message || '跨域限制'), true);
+        return false;
+      }
+    }
+
+    function downloadFromGrid(imageId) {
+      const img = batchImages.find(i => i._id === imageId);
+      if (img) doDownloadImage(img);
+    }
+
+    function downloadFromList(imageId, status) {
+      const img = previewImages.find(i => i.id === imageId && i.status === status);
+      if (img) doDownloadImage(img);
+    }
+
+    function downloadFromPreview() {
+      const current = previewImages[previewIndex];
+      if (current) doDownloadImage(current);
+    }
+
+    // 批量下载勾选图片：串行小间隔，避开浏览器多文件下载拦截
+    async function batchDownload(status) {
+      const ids = Array.from(document.querySelectorAll(`.image-checkbox[data-status="${status}"]:checked`)).map(cb => cb.dataset.id);
+      if (ids.length === 0) {
+        showToast('先勾选要下载的图片', true);
+        return;
+      }
+      let ok = 0;
+      for (const id of ids) {
+        const img = previewImages.find(i => i.id === id && i.status === status);
+        if (img && await doDownloadImage(img, true)) ok++;
+        await new Promise(r => setTimeout(r, 350));
+      }
+      showToast(`批量下载完成 ${ok}/${ids.length}`);
     }
 
     // 长图截断：高 > 宽×1.8 时，在 宽×1.8 处截断（cover 居中裁切上下），点击放大看全
@@ -1059,6 +1130,7 @@
         const newImages = res.data.map(item => ({
           id: item._id,
           url: urlMap[item.url] || item.url,
+          fileID: item.url,
           status: status,
           likeCount: item.likeCount || 0,
           dislikeCount: item.dislikeCount || 0,
@@ -1072,6 +1144,7 @@
           listEl.innerHTML = `
             <div class="batch-actions">
               <label><input type="checkbox" onchange="toggleSelectAll(this, ${status})"> 全选</label>
+              <button class="btn btn-success" onclick="batchDownload(${status})">📥 下载选中</button>
               <button class="btn btn-danger" onclick="batchDelete(${status})">批量删除</button>
               <span class="selected-count" id="selectedCount-${status}">已选择 0 张</span>
             </div>
@@ -1102,6 +1175,7 @@
                 <img src="${item.url}" onclick="previewImage(${startIndex + i}, ${status})">
                 <div class="item-overlay">
                   <span>🌸 ${item.likeCount} | 💩 ${item.dislikeCount}</span>
+                  <button class="btn btn-success btn-small" onclick="downloadFromList('${item.id}', ${status})">📥</button>
                   <button class="btn btn-danger btn-small" onclick="deleteImage('${item.id}', ${status})">删除</button>
                 </div>
               </div>
@@ -1125,10 +1199,12 @@
                   <div class="actions">
                     <button class="btn btn-success" onclick="reviewImage('${item.id}', 1)">通过</button>
                     <button class="btn btn-danger" onclick="rejectImage('${item.id}', ${status})">拒绝</button>
+                    <button class="btn btn-primary" onclick="downloadFromList('${item.id}', ${status})">下载</button>
                   </div>
                 ` : status === 3 ? `
                   <div class="actions">
                     <button class="btn btn-success" onclick="reviewImage('${item.id}', 1, 3)">通过</button>
+                    <button class="btn btn-primary" onclick="downloadFromList('${item.id}', ${status})">下载</button>
                     <button class="btn btn-danger" onclick="deleteImage('${item.id}', ${status})">删除</button>
                   </div>
                 ` : `
@@ -1367,7 +1443,8 @@
       modalInfo.textContent = `${previewIndex + 1} / ${previewImages.length} | 🌸 ${current.likeCount || 0} | 💩 ${current.dislikeCount || 0}`;
 
       // 审核走网格勾选/批量流程，弹窗只留「复制图片」（原通过/拒绝/删除按钮使用率低，已移除）
-      modalActions.innerHTML = `<button class="btn btn-primary" onclick="copyFromPreview()">📋 复制图片</button>`;
+      modalActions.innerHTML = `<button class="btn btn-primary" onclick="copyFromPreview()">📋 复制图片</button>
+        <button class="btn btn-success" onclick="downloadFromPreview()">📥 下载到本地</button>`;
 
       resetModalZoom();
       modal.style.display = 'block';
