@@ -12,7 +12,7 @@
 
 ## 启动命令
 - 小程序：微信开发者工具打开项目根目录
-- 管理后台：`python -m http.server 9000` → 访问 `http://localhost:9000/admin.html`
+- 管理后台：**在 `admin/` 目录下**起 `python -m http.server 9000` → 访问 `http://localhost:9000/admin.html`（服务根必须是 admin/；从项目根起会 404，对应地址变成 /admin/admin.html）
 - 自动上传：`pip install -r tools/uploader/requirements.txt && python tools/uploader/uploader.py`
 
 ## 关键约定（改云函数/数据时必看）
