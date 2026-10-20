@@ -854,15 +854,23 @@
       renderBatchGrid();
     }
 
-    // ── 来源群组：tdl 下载的文件名自带 chatId（{时间戳}_{chatId}_{消息Id}_…），据此反推来源。
-    // chatId→群名映射在此维护（新频道下载后用 admin 里显示的原始 chatId 补进来）；
-    // 未映射的 chatId 显示原始数字，解析不到（小程序投稿/早期文件）则不标 ──
+    // ── 来源群组：文件名第二段即来源 ID——tdl 下载为 {时间戳}_{chatId}_{消息Id}_…，
+    // qq_collector 收集为 {时间戳}_{QQ群号}_{消息Id}.ext，uploader 均保留原文件名。
+    // ID→显示名映射在此维护；未映射的 ID 显示原始数字，解析不到（小程序投稿/早期文件）则不标 ──
     const SOURCE_GROUPS = {
+      // Telegram 频道（tdl 下载）
       '1434817225': 'xinjingdaily',
       '1341930464': 'woshadiao',
       '1214996122': 'wtmsd',
       '1556999829': 'xinjingdaily_reject',
-      '1561391792': 'shadiao_refuse'
+      '1561391792': 'shadiao_refuse',
+      // QQ 群（qq_collector 收集，值为绑定群号，可改成实际群名）
+      '983841589': 'QQ群983841589',
+      '111489653': 'QQ群111489653',
+      '822718470': 'QQ群822718470',
+      '748214521': 'QQ群748214521',
+      '945949095': 'QQ群945949095',
+      '833400329': 'QQ群833400329'
     };
 
     function getSourceGroup(img) {
