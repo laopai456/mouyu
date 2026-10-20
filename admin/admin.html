@@ -246,6 +246,25 @@
     /* 下载按钮与复制并排（其左），存到浏览器下载目录 */
     .copy-thumb-btn.dl-thumb-btn { right: 50px; cursor: download; background: rgba(82, 196, 26, 0.92); }
     .copy-thumb-btn.dl-thumb-btn:hover { background: rgba(82, 196, 26, 1); }
+    /* 来源群组标识：网格卡左下角角标 + 列表行内文本 */
+    .src-badge {
+      position: absolute;
+      bottom: 8px;
+      left: 8px;
+      z-index: 3;
+      max-width: 70%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      background: rgba(0, 0, 0, 0.55);
+      color: #fff;
+      font-size: 11px;
+      line-height: 1.7;
+      padding: 1px 7px;
+      border-radius: 4px;
+      pointer-events: none;
+    }
+    .src-inline { color: #888; font-size: 12px; margin-left: 8px; }
     /* 轻提示 toast */
     .toast-tip {
       position: fixed;
@@ -814,11 +833,13 @@
         // 三态：0=空 1=填满(过审) 2=打勾(转发)
         const state = selectedMap.get(img._id) || 0;
         const stateCls = state === 1 ? 'filled' : state === 2 ? 'forward' : '';
+        const src = getSourceGroup(img);
         return `
           <div class="batch-review-item">
             <div class="batch-review-checkbox ${stateCls}" onclick="toggleCheckbox('${img._id}')"></div>
             <button class="copy-thumb-btn dl-thumb-btn" title="下载到本地（浏览器下载目录）" onclick="downloadFromGrid('${img._id}')">📥</button>
             <button class="copy-thumb-btn" title="复制图片，去聊天窗 Ctrl+V 发送" onclick="copyFromGrid('${img._id}')">📋</button>
+            ${src ? `<div class="src-badge" title="来源群组">${src}</div>` : ''}
             <img src="${url}" onclick="openPreview('${img._id}')" onload="clampLongImage(this)" onerror="console.error('网格图片加载失败:', this.src)" style="background:#eee;">
           </div>
         `;
@@ -831,6 +852,29 @@
       const current = selectedMap.get(imageId) || 0;
       selectedMap.set(imageId, (current + 1) % 3);
       renderBatchGrid();
+    }
+
+    // ── 来源群组：tdl 下载的文件名自带 chatId（{时间戳}_{chatId}_{消息Id}_…），据此反推来源。
+    // chatId→群名映射在此维护（新频道下载后用 admin 里显示的原始 chatId 补进来）；
+    // 未映射的 chatId 显示原始数字，解析不到（小程序投稿/早期文件）则不标 ──
+    const SOURCE_GROUPS = {
+      '1434817225': 'xinjingdaily',
+      '1341930464': 'woshadiao',
+      '1214996122': 'wtmsd',
+      '1556999829': 'xinjingdaily_reject',
+      '1561391792': 'shadiao_refuse'
+    };
+
+    function getSourceGroup(img) {
+      const stem = String(img.fileID || img.url || '').split('/').pop().replace(/\.[a-z0-9]+$/i, '');
+      const m = stem.match(/^\d{10,13}_(\d{7,12})/);
+      if (!m) return '';
+      return SOURCE_GROUPS[m[1]] || m[1];
+    }
+
+    function srcHtml(img) {
+      const s = getSourceGroup(img);
+      return s ? `<span class="src-inline">📂 ${s}</span>` : '';
     }
 
     // ── 复制图片到剪贴板（聊天窗 Ctrl+V 直接发）──
@@ -906,7 +950,8 @@
       const d = img.createTime ? new Date(img.createTime) : new Date();
       const day = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
       const idTail = String(img._id || img.id || '').slice(-6);
-      return `mouyu_${day}_${idTail}.${ext}`;
+      const grp = getSourceGroup(img);
+      return grp ? `mouyu_${grp}_${day}_${idTail}.${ext}` : `mouyu_${day}_${idTail}.${ext}`;
     }
 
     async function doDownloadImage(img, quiet = false) {
@@ -1175,6 +1220,7 @@
                 <img src="${item.url}" onclick="previewImage(${startIndex + i}, ${status})">
                 <div class="item-overlay">
                   <span>🌸 ${item.likeCount} | 💩 ${item.dislikeCount}</span>
+                  ${srcHtml(item)}
                   <button class="btn btn-success btn-small" onclick="downloadFromList('${item.id}', ${status})">📥</button>
                   <button class="btn btn-danger btn-small" onclick="deleteImage('${item.id}', ${status})">删除</button>
                 </div>
@@ -1194,6 +1240,7 @@
                 <div class="info">
                   <div class="time">${formatTime(item.createTime)}</div>
                   <div style="margin-top:5px;color:#666;font-size:12px">🌸 ${item.likeCount} | 💩 ${item.dislikeCount}</div>
+                  ${srcHtml(item)}
                 </div>
                 ${status === 0 ? `
                   <div class="actions">
@@ -1440,7 +1487,8 @@
       const status = current.status !== undefined ? current.status : 0;
 
       modalImg.src = displayUrl;
-      modalInfo.textContent = `${previewIndex + 1} / ${previewImages.length} | 🌸 ${current.likeCount || 0} | 💩 ${current.dislikeCount || 0}`;
+      const src = getSourceGroup(current);
+      modalInfo.textContent = `${previewIndex + 1} / ${previewImages.length} | 🌸 ${current.likeCount || 0} | 💩 ${current.dislikeCount || 0}${src ? ` | 📂 ${src}` : ''}`;
 
       // 审核走网格勾选/批量流程，弹窗只留「复制图片」（原通过/拒绝/删除按钮使用率低，已移除）
       modalActions.innerHTML = `<button class="btn btn-primary" onclick="copyFromPreview()">📋 复制图片</button>
