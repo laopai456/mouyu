@@ -2,6 +2,14 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-10-21 NapCat\temp 被清理垃圾误删致滴灌全挂——重建目录+启动/看门狗自愈（qqbot 仓库 5100a35）
+
+- **故障**：10-21 10:03 起滴灌发图全挂 `ActionFailed retcode=1200 ENOENT ... Tencent Files\NapCat\temp\<uuid>`，插件熔断 10:13 触发（60 分钟自动恢复）。根因：清理垃圾（疑腾讯电脑管家，机器上 QQPCRTP/QQPCTray 在跑）把 `Documents\Tencent Files\NapCat` 整个目录删了——同目录下 QQ 账号数据/nt_qq 都在、唯独 NapCat 没了；10-20 全天滴灌正常、10-21 首轮即挂。链路：插件发 base64 → NapCat 落盘 temp\<uuid> → NTQQ 读取；NapCat 不会在运行中重建被删目录，故每张必 ENOENT。磁盘余 48G 排除写满。
+- **即时修复**：手动 mkdir 重建 `NapCat\temp`（无需重启——NapCat 每张图新落盘一个 uuid 文件，目录在即恢复）。
+- **自愈改动（qqbot 仓库 5100a35，仅两个 bat）**：① `start_napcat_isolated.bat` 拉起 NapCat 前确保目录存在（开机自启/一键启动/重启QQ/看门狗拉活四条路径全经此单点）；② `watchdog.bat` 每分钟末尾同款检查——运行中再被删 ≤1 分钟自动重建，无需重启。工作区其他未提交改动（515872533 群相关）未动未入库。
+- **验证**：mkdir 语句真实 bat 上下文实测（首跑连父目录建、二跑幂等）；改后 watchdog.bat 实跑 exit 0、无误触发重启。**待验证**：~11:13 熔断到期后首轮滴灌应补发 833400329 欠的 5 张（届时 grep bot.log 确认）。
+- **防复发待办**：电脑管家清理白名单加 `Documents\Tencent Files\NapCat`（需用户在管家里操作）。
+
 ## 2026-10-12（补2）QQ 来源显示真实群名（取自机器人群列表日志）
 
 - **用户反馈**：显示群号认不出来，要群名。
