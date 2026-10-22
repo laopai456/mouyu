@@ -2,6 +2,14 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-10-22 来源群名自动同步——新绑群不再需要手动补映射（修上次遗留缺口）
+
+- **用户反馈**：新绑定群（515872533=nga事业部）显示为群号，指出手动补映射的设计是缺口，应修根因。
+- **方案**：群名数据只在机器人运行时存在 → 让 qqbot 自动同步给 admin，全链路零云函数改动。
+- **改动**：① **qqbot** `plugins/qq_collector.py`：新增「来源群名同步」——`on_bot_connect` 起 10 分钟级循环（复用 FAIL_SWEEP_INTERVAL，带防重复建任务守卫），`get_group_list` 取绑定群实名，内容有变化才写 `mouyu/admin/source-groups.local.js`（`Object.assign(SOURCE_GROUPS, {...})` 格式；路径从 UPLOADER_CONFIG 向上三级推导）；② **mouyu** `admin/admin.html` 主脚本后加载该文件（缺失静默 404，托管部署无此文件不影响）；③ `.gitignore` 排除该本地文件（机器人已退出群的补条目仍手写在 SOURCE_GROUPS，不会被覆盖）。
+- **验证**：py_compile 过；admin 内联 JS node --check 过；本地服务实测 admin.html 与 source-groups.local.js 均 200。已预生成当前 6 群映射（含 nga事业部）——**机器人重启前即生效**；qqbot 侧改动需重启机器人才开始自动同步。
+- **提交**：mouyu / qqbot 两仓库分别见各自 git log。
+
 ## 2026-10-21 NapCat\temp 被清理垃圾误删致滴灌全挂——重建目录+启动/看门狗自愈（qqbot 仓库 5100a35）
 
 - **故障**：10-21 10:03 起滴灌发图全挂 `ActionFailed retcode=1200 ENOENT ... Tencent Files\NapCat\temp\<uuid>`，插件熔断 10:13 触发（60 分钟自动恢复）。根因：清理垃圾（疑腾讯电脑管家，机器上 QQPCRTP/QQPCTray 在跑）把 `Documents\Tencent Files\NapCat` 整个目录删了——同目录下 QQ 账号数据/nt_qq 都在、唯独 NapCat 没了；10-20 全天滴灌正常、10-21 首轮即挂。链路：插件发 base64 → NapCat 落盘 temp\<uuid> → NTQQ 读取；NapCat 不会在运行中重建被删目录，故每张必 ENOENT。磁盘余 48G 排除写满。

@@ -35,6 +35,7 @@ tools/migration/node_modules/
 
 # 本地真实值配置（开源仓库只留 *.example 模板）
 admin/config.local.js
+admin/source-groups.local.js
 env.local.js
 tools/config.local.json
 # TG 会话与运行时缓存（严禁入库；不带路径前缀，根目录同名文件一并覆盖）
