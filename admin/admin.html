@@ -876,9 +876,17 @@
 
     function getSourceGroup(img) {
       const stem = String(img.fileID || img.url || '').split('/').pop().replace(/\.[a-z0-9]+$/i, '');
-      const m = stem.match(/^\d{10,13}_(\d{7,12})/);
-      if (!m) return '';
-      return SOURCE_GROUPS[m[1]] || m[1];
+      const parts = stem.split('_');
+      // tdl 下载：{时间戳}_{chatId}_{消息Id}_{文件id}（≥4 段）
+      if (parts.length >= 4 && /^\d{10,13}$/.test(parts[0]) && /^\d{7,12}$/.test(parts[1])) {
+        return SOURCE_GROUPS[parts[1]] || parts[1];
+      }
+      // QQ 收集：{时间戳}_{群号}_{消息Id}（3 段，消息Id 为长数字；煎蛋爬虫的
+      // {时间戳}_{帖子id}_{序号} 第三段只有 1-3 位，不算来源）
+      if (parts.length === 3 && /^\d{10,13}$/.test(parts[0]) && /^\d{6,12}$/.test(parts[1]) && /^\d{5,12}$/.test(parts[2])) {
+        return SOURCE_GROUPS[parts[1]] || parts[1];
+      }
+      return '';
     }
 
     function srcHtml(img) {
