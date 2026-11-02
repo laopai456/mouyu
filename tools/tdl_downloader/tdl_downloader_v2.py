@@ -662,6 +662,11 @@ def filter_and_download(
         else:
             # 下载失败不推进进度，避免没下成的文件被永久跳过（下次重试）
             print(f"⚠ 下载未成功，保留旧进度（不推进到 {max_id}），下次将重试本批")
+    else:
+        # 无新消息：导出往返已成功，同样写到期日——否则沉默频道每轮都到期，
+        # 天天被重复导出，分频调度对它们形同虚设
+        mark_pulled(progress_cache, channel)
+        save_json_cache(PROGRESS_CACHE_FILE, progress_cache)
 
     if os.path.exists(filtered_file):
         os.remove(filtered_file)
