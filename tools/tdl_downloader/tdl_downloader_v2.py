@@ -38,6 +38,15 @@ CHANNELS = {
 CHANNEL_PULL_DAILY = {"xinjingdaily", "wtmsd"}
 CHANNEL_PULL_RANDOM_DAYS = (1, 2)
 
+# 单轮单频道的拉取时间窗（小时）：账号切换/久未运行后的积压不再一口气扫完，
+# 而是每轮只拉时间窗内的量，剩余积压由后续调度轮次消化——「分几天慢慢看完」
+# 的回访读者形状，避免长距离扫描+大批量下载的搬运工形状。
+MAX_BATCH_HOURS = 24
+
+# 同一轮里相邻频道之间的随机间歇（秒）：5 个频道背靠背连跑是机器节拍，
+# 散布成几十分钟的零散活动更像真人。仅影响单轮总时长，不影响结果。
+CHANNEL_GAP_SECONDS = (90, 300)
+
 DOWNLOAD_DIR = r"C:\Users\w\Downloads\tdl"
 INCLUDE_TYPES = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
 MIN_FILE_SIZE_KB = 20
@@ -368,9 +377,27 @@ def export_channel(channel: str, limit: int, output_file: str, progress_cache: d
     last_id = progress_cache.get(channel, {}).get("last_id", 0)
     if last_id:
         start_id = last_id + 1
-        cmd = [TDL_PATH, "chat", "export", "-c", channel, "-o", output_file,
-               "-T", "id", "-i", str(start_id), "--with-content"] + _tdl_base_args()
-        desc = f"导出频道: {channel} (增量模式，从消息ID {start_id} 开始)"
+        # 积压超窗时按时间窗切分：只拉 last_time~last_time+MAX_BATCH_HOURS，
+        # 防止单轮长距离扫描+大批量下载（详见 MAX_BATCH_HOURS 注释）
+        last_time_str = progress_cache.get(channel, {}).get("last_time")
+        window_mode = False
+        try:
+            last_dt = datetime.fromisoformat(last_time_str) if last_time_str else None
+            if last_dt and (datetime.now() - last_dt).total_seconds() > MAX_BATCH_HOURS * 3600:
+                window_end = last_dt + timedelta(hours=MAX_BATCH_HOURS)
+                ts_input = f"{int(last_dt.timestamp())},{int(window_end.timestamp())}"
+                window_mode = True
+        except (ValueError, TypeError, OSError):
+            window_mode = False  # 脏数据兜底：退回常规增量
+
+        if window_mode:
+            cmd = [TDL_PATH, "chat", "export", "-c", channel, "-o", output_file,
+                   "-T", "time", "-i", ts_input, "--with-content"] + _tdl_base_args()
+            desc = f"导出频道: {channel} (积压切窗模式，从 {last_dt:%m-%d %H:%M} 起 {MAX_BATCH_HOURS}h)"
+        else:
+            cmd = [TDL_PATH, "chat", "export", "-c", channel, "-o", output_file,
+                   "-T", "id", "-i", str(start_id), "--with-content"] + _tdl_base_args()
+            desc = f"导出频道: {channel} (增量模式，从消息ID {start_id} 开始)"
     else:
         cmd = [TDL_PATH, "chat", "export", "-c", channel, "-o", output_file,
                "-T", "last", "-i", str(limit), "--with-content"] + _tdl_base_args()
@@ -1203,7 +1230,11 @@ def main() -> None:
         return
 
     login_diag: Optional[str] = None  # export 失败时的登录/网络诊断结果缓存（"ok"/"not_authorized"/"failed"）
-    for channel in due:
+    for idx, channel in enumerate(due):
+        if idx:
+            gap = random.randint(*CHANNEL_GAP_SECONDS)
+            print(f"\n[节奏] 频道间歇 {gap}s（打散机器节拍）...")
+            time.sleep(gap)
         limit = CHANNELS[channel]
         print(f"\n\n处理频道: {channel} (限制 {limit} 条)")
         export_file = os.path.join(DOWNLOAD_DIR, f"{channel}_export.json")
