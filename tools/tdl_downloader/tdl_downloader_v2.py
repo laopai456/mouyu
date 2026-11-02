@@ -3,6 +3,7 @@ import json
 import os
 import hashlib
 import queue
+import random
 import re
 import shutil
 import socket
@@ -10,7 +11,7 @@ import sys
 import tempfile
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -30,6 +31,12 @@ CHANNELS = {
     "xinjingdaily_reject": 100,
     "wtmsd": 300,
 }
+
+# 每频道拉取频次（防风控调度，2026-11 起随封号对策加入）：量大频道每日拉，其余
+# 1~2 天随机间隔，避免固定节奏。量小频道拉得勤只是白付握手税+流量指纹，无收益。
+# 调整频道分组只动这两个配置；--all-now 可临时忽略调度全拉。
+CHANNEL_PULL_DAILY = {"xinjingdaily", "wtmsd"}
+CHANNEL_PULL_RANDOM_DAYS = (1, 2)
 
 DOWNLOAD_DIR = r"C:\Users\w\Downloads\tdl"
 INCLUDE_TYPES = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
@@ -648,6 +655,8 @@ def filter_and_download(
                 "last_id": max_id,
                 "last_time": datetime.now().isoformat(),
             }
+            # 防风控调度：导出+下载都成功才写下轮到期日；失败则下轮立即重试本频道
+            mark_pulled(progress_cache, channel)
             save_json_cache(PROGRESS_CACHE_FILE, progress_cache)
             print(f"已记录进度: 频道 {channel} 最后消息ID: {max_id}")
         else:
@@ -712,6 +721,38 @@ def _tdl_base_args() -> list[str]:
         "--proxy", PROXY, "--reconnect-timeout", RECONNECT_TIMEOUT,
         "--limit", "1", "--threads", "1", "--delay", "500ms", "--pool", "2",
     ]
+
+
+def due_channels(progress_cache: dict, force_all: bool = False) -> list[str]:
+    """防风控频次调度：筛出本轮该拉的频道。
+
+    progress_cache 每频道记 next_pull（ISO 日期）；无记录/解析失败视为到期，
+    新频道或脏数据不会饿死。force_all 忽略调度全部立即拉（--all-now）。
+    """
+    if force_all:
+        return list(CHANNELS)
+    today = date.today()
+    due = []
+    for ch in CHANNELS:
+        np = progress_cache.get(ch, {}).get("next_pull")
+        try:
+            need = not np or today >= date.fromisoformat(np)
+        except ValueError:
+            need = True
+        if need:
+            due.append(ch)
+    return due
+
+
+def mark_pulled(progress_cache: dict, channel: str) -> None:
+    """拉取成功后写下轮到期日：量大频道次日，其余 1~2 天随机。"""
+    if channel in CHANNEL_PULL_DAILY:
+        interval = 1
+    else:
+        interval = random.randint(*CHANNEL_PULL_RANDOM_DAYS)
+    progress_cache.setdefault(channel, {})["next_pull"] = (
+        date.today() + timedelta(days=interval)
+    ).isoformat()
 
 
 def check_tdl_login() -> str:
@@ -1062,6 +1103,8 @@ def main() -> None:
                         help="重新登录 tdl（默认 desktop，可选 code/qr）")
     parser.add_argument("--check-channels", action="store_true",
                         help="检查频道加群状态，列出未加入频道的 t.me 链接")
+    parser.add_argument("--all-now", action="store_true",
+                        help="忽略拉取调度，全部频道本轮立即拉（手动补拉用）")
     args = parser.parse_args()
 
     if not os.path.exists(TDL_PATH):
@@ -1145,8 +1188,18 @@ def main() -> None:
     else:
         print("\n首次运行，无缓存，将开始全新下载。")
 
+    # 防风控频次调度：只拉到期频道，全部未到期则零 tdl 流量直接退出（省握手税）
+    due = due_channels(progress_cache, force_all=args.all_now)
+    skipped = [ch for ch in CHANNELS if ch not in due]
+    if skipped:
+        print(f"\n[调度] 本轮跳过(未到期): {', '.join(skipped)}")
+    if not due:
+        print("[调度] 本轮无到期频道，直接退出（--all-now 可强制全拉）")
+        return
+
     login_diag: Optional[str] = None  # export 失败时的登录/网络诊断结果缓存（"ok"/"not_authorized"/"failed"）
-    for channel, limit in CHANNELS.items():
+    for channel in due:
+        limit = CHANNELS[channel]
         print(f"\n\n处理频道: {channel} (限制 {limit} 条)")
         export_file = os.path.join(DOWNLOAD_DIR, f"{channel}_export.json")
 
