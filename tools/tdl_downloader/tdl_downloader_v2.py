@@ -700,12 +700,18 @@ def _socks5_e2e_probe(timeout: float = 8.0) -> bool:
 
 
 def _tdl_base_args() -> list[str]:
-    """所有 tdl 调用的公共参数：代理 + 内部重连退避上限。
+    """所有 tdl 调用的公共参数：代理 + 内部重连退避上限 + 防风控降强度。
 
     每个 tdl 进程都要付一次 MTProto 握手税（实测 1.5~30s 波动），公共参数
     收敛到这里统一管理。
+    降强度（2026-11 起频繁封号后加）：串行任务 -l 1、单线程 -t 1、任务间
+    延迟 500ms、DC 连接池收窄 --pool 2——拉低「高并发爬虫」流量指纹。
+    代价：批量下载变慢（千张图约多 8 分钟），远低于换号成本。
     """
-    return ["--proxy", PROXY, "--reconnect-timeout", RECONNECT_TIMEOUT]
+    return [
+        "--proxy", PROXY, "--reconnect-timeout", RECONNECT_TIMEOUT,
+        "--limit", "1", "--threads", "1", "--delay", "500ms", "--pool", "2",
+    ]
 
 
 def check_tdl_login() -> str:
