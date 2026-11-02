@@ -755,6 +755,30 @@ def _tdl_base_args() -> list[str]:
     ]
 
 
+# 与 tdl 共用会话密钥的官方客户端（desktop 导入模式）：拉取期间并行运行 =
+# 同一 auth key 上双客户端指纹并存（软异常信号，老号实测能活但白扣分）。
+# 启动拉取前自动检测提醒；--close-desktop 自动结束它（会话密钥早已拷贝，
+# tdl 不依赖 Desktop 运行，中途退出无副作用）。
+SHARED_KEY_CLIENTS = ("Telegram.exe",)
+
+
+def check_shared_key_clients(auto_close: bool = False) -> None:
+    for client in SHARED_KEY_CLIENTS:
+        out = subprocess.run(
+            ["tasklist", "/FI", f"IMAGENAME eq {client}"],
+            capture_output=True, text=True,
+        ).stdout
+        if client.lower() not in out.lower():
+            continue
+        if auto_close:
+            subprocess.run(["taskkill", "/F", "/IM", client], capture_output=True)
+            print(f"[共钥检查] 已自动结束 {client}（--close-desktop）：避免拉取期间同 key 双客户端指纹并存")
+        else:
+            print(f"\n[共钥检查] ⚠ 检测到 {client} 正在运行：它和 tdl 共用同一把会话密钥，"
+                  f"拉取期间并存 = 双客户端指纹（软扣分项，建议避免）。")
+            print("          建议：托盘退出后重跑；或下次直接用 --close-desktop 自动结束（不影响拉取）。")
+
+
 def due_channels(progress_cache: dict, force_all: bool = False) -> list[str]:
     """防风控频次调度：筛出本轮该拉的频道。
 
@@ -1137,6 +1161,8 @@ def main() -> None:
                         help="检查频道加群状态，列出未加入频道的 t.me 链接")
     parser.add_argument("--all-now", action="store_true",
                         help="忽略拉取调度，全部频道本轮立即拉（手动补拉用）")
+    parser.add_argument("--close-desktop", action="store_true",
+                        help="启动拉取前自动结束 Telegram Desktop（避免同 key 双指纹并存）")
     args = parser.parse_args()
 
     if not os.path.exists(TDL_PATH):
@@ -1228,6 +1254,9 @@ def main() -> None:
     if not due:
         print("[调度] 本轮无到期频道，直接退出（--all-now 可强制全拉）")
         return
+
+    # 有实际拉取动作才做共钥客户端检查（无到期的早退轮零 tdl 流量，无需提醒）
+    check_shared_key_clients(auto_close=args.close_desktop)
 
     login_diag: Optional[str] = None  # export 失败时的登录/网络诊断结果缓存（"ok"/"not_authorized"/"failed"）
     for idx, channel in enumerate(due):
