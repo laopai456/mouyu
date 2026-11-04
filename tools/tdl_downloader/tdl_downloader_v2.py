@@ -66,6 +66,9 @@ BASE_DIR = Path(__file__).parent
 # pHash 近重复过滤（2026-11-04）：64 位汉明距离阈值。8 = 抓重压缩/缩放/小水印，
 # 对「同模板改字」的图（聊天截图 meme）偏保守不误杀。误杀可从隔离区回捞。
 PHASH_THRESHOLD = 8
+# 滚动窗口（2026-11-05 用户模型）：梗图重复集中在流行期 1~2 天，之后衰减——
+# 只比对近 48h 入库的指纹，过期自动清理。库恒定几百条，也免于无限膨胀。
+PHASH_WINDOW_HOURS = 48
 PHASH_CACHE_FILE = BASE_DIR / "cache" / "phash_cache.json"
 # 隔离区放 DOWNLOAD_DIR 之外：uploader os.walk 递归扫描，放里面会被捞走上传
 DUPLICATES_DIR = r"C:\Users\w\Downloads\tdl_duplicates"
@@ -554,7 +557,17 @@ def _load_phash_cache() -> dict:
     if os.path.exists(PHASH_CACHE_FILE):
         try:
             with open(PHASH_CACHE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                raw = json.load(f)
+            # 滚动窗口：只留近 PHASH_WINDOW_HOURS 的指纹，流行期外的重复按衰减模型放弃
+            cutoff = datetime.now() - timedelta(hours=PHASH_WINDOW_HOURS)
+            fresh = {}
+            for h, v in raw.items():
+                try:
+                    if datetime.fromisoformat(v.get("time", "")) >= cutoff:
+                        fresh[h] = v
+                except (ValueError, TypeError):
+                    pass  # 脏记录直接丢弃
+            return fresh
         except (OSError, json.JSONDecodeError) as e:
             print(f"⚠ pHash 缓存损坏，重建: {e}")
     return {}
