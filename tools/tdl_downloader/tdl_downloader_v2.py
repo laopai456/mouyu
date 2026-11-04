@@ -62,6 +62,13 @@ MIN_FILE_SIZE_KB = 20
 DOWNLOAD_THREADS = 8
 
 BASE_DIR = Path(__file__).parent
+
+# pHash 近重复过滤（2026-11-04）：64 位汉明距离阈值。8 = 抓重压缩/缩放/小水印，
+# 对「同模板改字」的图（聊天截图 meme）偏保守不误杀。误杀可从隔离区回捞。
+PHASH_THRESHOLD = 8
+PHASH_CACHE_FILE = BASE_DIR / "cache" / "phash_cache.json"
+# 隔离区放 DOWNLOAD_DIR 之外：uploader os.walk 递归扫描，放里面会被捞走上传
+DUPLICATES_DIR = r"C:\Users\w\Downloads\tdl_duplicates"
 MD5_CACHE_FILE = BASE_DIR / "cache" / "md5_cache.json"
 PROGRESS_CACHE_FILE = BASE_DIR / "cache" / "progress_cache.json"
 DISCOVER_CACHE_FILE = BASE_DIR / "cache" / "discover_cache.json"
@@ -467,7 +474,8 @@ def _build_sequential_groups(file_list: list[dict]) -> set[str]:
 
 def _deduplicate_new_files(
     target_dir: str, new_filenames: list[str],
-    md5_cache: dict, channel: str
+    md5_cache: dict, channel: str,
+    phash_cache: dict, phash_ints: list,
 ) -> tuple[int, int]:
     downloaded = 0
     skipped = 0
@@ -515,6 +523,10 @@ def _deduplicate_new_files(
                 os.remove(file_path)
                 skipped += 1
             else:
+                # pHash 近重复门：字节不同但视觉相同的图（重压缩/缩放/水印版）在此拦截
+                if _phash_dedup_gate(file_path, filename, channel, phash_cache, phash_ints):
+                    skipped += 1
+                    continue
                 md5_cache[md5] = {
                     "channel": channel,
                     "filename": filename,
@@ -530,6 +542,77 @@ def _deduplicate_new_files(
 
 
 _TDL_NAME_PREFIX_RE = re.compile(r"^\d+_\d+_")
+
+
+# ── pHash 近重复过滤（2026-11-04）：MD5 只认字节，TG 客户端发图默认压缩，
+# 同一张梗图经手 N 人就有 N 个字节版本 → 字节级去重抓不住视觉重复。
+# pHash 对压缩/缩放/水印稳健，Hamming 距离 ≤ 阈值判近重复。
+# 库只增不清（防旧梗隔月被其他频道重发）；历史 2 万张字节已随上传删除，
+# 无法回填，库自今日前向积累——头几个月内与历史图的重复仍会漏，如实告知。
+# 隔离区放 DOWNLOAD_DIR 之外：uploader os.walk 递归扫描，放里面会被捞走上传。
+def _load_phash_cache() -> dict:
+    if os.path.exists(PHASH_CACHE_FILE):
+        try:
+            with open(PHASH_CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"⚠ pHash 缓存损坏，重建: {e}")
+    return {}
+
+
+def _save_phash_cache(cache: dict) -> None:
+    os.makedirs(PHASH_CACHE_FILE.parent, exist_ok=True)
+    with open(PHASH_CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False)
+
+
+def _phash_ints(cache: dict) -> list[tuple[str, int]]:
+    return [(h, int(h, 16)) for h in cache]
+
+
+def _phash_of(path: str) -> Optional[int]:
+    try:
+        import imagehash
+        from PIL import Image
+        with Image.open(path) as im:
+            return int(str(imagehash.phash(im)), 16)
+    except Exception as e:
+        print(f"⚠ pHash 计算失败({os.path.basename(path)}): {e}")
+        return None
+
+
+def _phash_match(ph: int, cache: dict, ints: list[tuple[str, int]]):
+    best_h, best_d = None, 65
+    for h, v in ints:
+        d = (ph ^ v).bit_count()
+        if d < best_d:
+            best_h, best_d = h, d
+    if best_d <= PHASH_THRESHOLD:
+        return best_h, best_d
+    return None
+
+
+def _phash_dedup_gate(file_path: str, filename: str, channel: str,
+                      phash_cache: dict, phash_ints: list) -> bool:
+    """近重复=True（文件已移入隔离区）；新图=False（hash 已入库）。"""
+    ph = _phash_of(file_path)
+    if ph is None:
+        return False
+    hit = _phash_match(ph, phash_cache, phash_ints)
+    if hit:
+        h, d = hit
+        print(f"近重复(pHash距离{d}≤{PHASH_THRESHOLD})，隔离不上传: {filename}")
+        print(f"    └ 与库内 {phash_cache[h].get('channel','?')}/{phash_cache[h].get('file','?')} 相似")
+        os.makedirs(DUPLICATES_DIR, exist_ok=True)
+        try:
+            shutil.move(file_path, os.path.join(DUPLICATES_DIR, filename))
+        except (OSError, shutil.Error) as e:
+            print(f"⚠ 隔离移动失败(保留原图): {e}")
+        return True
+    phash_cache[f"{ph:016x}"] = {"file": filename, "channel": channel,
+                                 "time": datetime.now().isoformat()}
+    phash_ints.append((f"{ph:016x}", ph))
+    return False
 
 
 def _strip_tdl_name_prefix(filename: str) -> str:
@@ -666,7 +749,16 @@ def filter_and_download(
         if os.path.isfile(os.path.join(download_dir, f)) and f not in cached_files
     ]
 
-    downloaded, skipped = _deduplicate_new_files(download_dir, new_files, md5_cache, channel)
+    # pHash 近重复过滤：跨 batch 复用同一份缓存（本批内即插即比），批末落盘
+    phash_cache = _load_phash_cache()
+    phash_ints = _phash_ints(phash_cache)
+    before_phash = len(phash_ints)
+
+    downloaded, skipped = _deduplicate_new_files(download_dir, new_files, md5_cache, channel,
+                                                 phash_cache, phash_ints)
+    if len(phash_ints) != before_phash:
+        _save_phash_cache(phash_cache)
+        print(f"pHash 库已更新: {before_phash} → {len(phash_ints)} 条")
     save_json_cache(MD5_CACHE_FILE, md5_cache)
 
     if downloaded == 0 and skipped == 0:
