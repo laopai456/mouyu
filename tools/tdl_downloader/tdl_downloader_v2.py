@@ -30,6 +30,13 @@ CHANNELS = {
     "xinjingdaily": 300,
     "xinjingdaily_reject": 100,
     "wtmsd": 300,
+    # 2026-11-04 新增批次（用户指定）：更新频率未观察，先入随机 1~2 天组，
+    # 全量模式兜底 200 条；跑几轮后按实际更新量决定是否升入每日组
+    "jandan_pic": 200,
+    "fucku_idiot": 200,
+    "rvalue_daily": 200,
+    "douban_read": 200,
+    "acgdaily": 200,
 }
 
 # 每频道拉取频次（防风控调度，2026-11 起随封号对策加入）：量大频道每日拉，其余
