@@ -50,6 +50,11 @@ CHANNEL_PULL_RANDOM_DAYS = (1, 2)
 # 的回访读者形状，避免长距离扫描+大批量下载的搬运工形状。
 MAX_BATCH_HOURS = 24
 
+# 单频道单轮下载张数截断（2026-11-05）：单频道连拉超过 N 张先转下一个频道，
+# 余量留给后续调度轮——缩短单频道连续拉取时长，打散「逐群清仓」的机器形状。
+# 必须配套水位=实际处理列表的 max id（见 filter_and_download），余量才不会丢。
+DOWNLOAD_CAP_PER_RUN = 50
+
 # 同一轮里相邻频道之间的随机间歇（秒）：5 个频道背靠背连跑是机器节拍，
 # 散布成几十分钟的零散活动更像真人。仅影响单轮总时长，不影响结果。
 CHANNEL_GAP_SECONDS = (90, 300)
@@ -677,6 +682,11 @@ def filter_and_download(
     if len(filtered) < before_black:
         print(f"黑名单剔除坏文件 {before_black - len(filtered)} 张（失败≥{BAD_FILE_BLACKLIST_THRESHOLD}次，永久跳过）")
 
+    # 单频道单轮截断：超出的余量留给后续调度轮（水位配套改造，见 max_id 处）
+    if len(filtered) > DOWNLOAD_CAP_PER_RUN:
+        print(f"单轮截断: {len(filtered)} → {DOWNLOAD_CAP_PER_RUN} 张（余量下轮继续）")
+        filtered = filtered[:DOWNLOAD_CAP_PER_RUN]
+
     if not filtered:
         print("没有找到图片")
         return
@@ -784,8 +794,10 @@ def filter_and_download(
     else:
         print(f"下载完成: 新增 {downloaded} 张, 跳过重复 {skipped} 张")
 
+    # 水位=本轮实际处理列表(filtered，含截断/黑名单剔除后)的 max id，而非整批
+    # 导出的 max——单轮截断时余量保持在水位之下，下轮增量自然续上，不会丢图
     max_id = max(
-        (m.get("id", 0) for m in messages if isinstance(m.get("id", int), int)),
+        (m.get("id", 0) for m in filtered if isinstance(m.get("id", int), int)),
         default=0,
     )
     if max_id > 0:
