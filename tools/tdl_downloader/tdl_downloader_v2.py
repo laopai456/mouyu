@@ -45,15 +45,12 @@ CHANNELS = {
 CHANNEL_PULL_DAILY = {"xinjingdaily", "wtmsd"}
 CHANNEL_PULL_RANDOM_DAYS = (1, 2)
 
-# 单轮单频道的拉取时间窗（小时）：账号切换/久未运行后的积压不再一口气扫完，
-# 而是每轮只拉时间窗内的量，剩余积压由后续调度轮次消化——「分几天慢慢看完」
-# 的回访读者形状，避免长距离扫描+大批量下载的搬运工形状。
-MAX_BATCH_HOURS = 24
-
-# 单频道单轮下载张数截断（2026-11-05）：单频道连拉超过 N 张先转下一个频道，
-# 余量留给后续调度轮——缩短单频道连续拉取时长，打散「逐群清仓」的机器形状。
-# 必须配套水位=实际处理列表的 max id（见 filter_and_download），余量才不会丢。
-DOWNLOAD_CAP_PER_RUN = 50
+# 单频道单轮下载截断（2026-11-10 百分比系数版）：增量积压时单轮拉
+# max(保底, 积压×百分比)，大积压按比例加速消化（任意积压 ≤3 轮清完），
+# 小增量（日常 5~30 条）不受影响。全量兜底模式不受此限（其 limit=200
+# 本身就是兜底上限，截断会静默丢老图）。水位配套=实际处理列表 max id。
+DOWNLOAD_CAP_MIN = 50
+DOWNLOAD_CAP_PCT = 0.5
 
 # 同一轮里相邻频道之间的随机间歇（秒）：5 个频道背靠背连跑是机器节拍，
 # 散布成几十分钟的零散活动更像真人。仅影响单轮总时长，不影响结果。
@@ -398,28 +395,15 @@ def run_cmd(cmd: list[str], desc: str = "", target_dir: Optional[str] = None,
 def export_channel(channel: str, limit: int, output_file: str, progress_cache: dict) -> bool:
     last_id = progress_cache.get(channel, {}).get("last_id", 0)
     if last_id:
+        # 增量一律 ID 模式。曾经的 24h 时间窗切分已撤（2026-11-10）：
+        # 它与全量兜底的水位语义冲突——兜底后水位在尖端，窗口却往过去的
+        # 时间扫，要么 0 消息死循环（不写到期日→永远到期→永远扫同一窗），
+        # 要么全是已拉过的旧消息并把水位回写倒退。burst 控制由
+        # DOWNLOAD_CAP_MIN/PCT 百分比截断承担（见 filter_and_download）。
         start_id = last_id + 1
-        # 积压超窗时按时间窗切分：只拉 last_time~last_time+MAX_BATCH_HOURS，
-        # 防止单轮长距离扫描+大批量下载（详见 MAX_BATCH_HOURS 注释）
-        last_time_str = progress_cache.get(channel, {}).get("last_time")
-        window_mode = False
-        try:
-            last_dt = datetime.fromisoformat(last_time_str) if last_time_str else None
-            if last_dt and (datetime.now() - last_dt).total_seconds() > MAX_BATCH_HOURS * 3600:
-                window_end = last_dt + timedelta(hours=MAX_BATCH_HOURS)
-                ts_input = f"{int(last_dt.timestamp())},{int(window_end.timestamp())}"
-                window_mode = True
-        except (ValueError, TypeError, OSError):
-            window_mode = False  # 脏数据兜底：退回常规增量
-
-        if window_mode:
-            cmd = [TDL_PATH, "chat", "export", "-c", channel, "-o", output_file,
-                   "-T", "time", "-i", ts_input, "--with-content"] + _tdl_base_args()
-            desc = f"导出频道: {channel} (积压切窗模式，从 {last_dt:%m-%d %H:%M} 起 {MAX_BATCH_HOURS}h)"
-        else:
-            cmd = [TDL_PATH, "chat", "export", "-c", channel, "-o", output_file,
-                   "-T", "id", "-i", str(start_id), "--with-content"] + _tdl_base_args()
-            desc = f"导出频道: {channel} (增量模式，从消息ID {start_id} 开始)"
+        cmd = [TDL_PATH, "chat", "export", "-c", channel, "-o", output_file,
+               "-T", "id", "-i", str(start_id), "--with-content"] + _tdl_base_args()
+        desc = f"导出频道: {channel} (增量模式，从消息ID {start_id} 开始)"
     else:
         cmd = [TDL_PATH, "chat", "export", "-c", channel, "-o", output_file,
                "-T", "last", "-i", str(limit), "--with-content"] + _tdl_base_args()
@@ -644,7 +628,8 @@ def _strip_tdl_name_prefix(filename: str) -> str:
 
 def filter_and_download(
     export_file: str, download_dir: str, channel: str, limit: int,
-    md5_cache: dict, progress_cache: dict, bad_cache: dict
+    md5_cache: dict, progress_cache: dict, bad_cache: dict,
+    apply_pct_cap: bool = False,
 ) -> None:
     if not os.path.exists(export_file):
         print(f"导出文件不存在: {export_file}")
@@ -682,10 +667,15 @@ def filter_and_download(
     if len(filtered) < before_black:
         print(f"黑名单剔除坏文件 {before_black - len(filtered)} 张（失败≥{BAD_FILE_BLACKLIST_THRESHOLD}次，永久跳过）")
 
-    # 单频道单轮截断：超出的余量留给后续调度轮（水位配套改造，见 max_id 处）
-    if len(filtered) > DOWNLOAD_CAP_PER_RUN:
-        print(f"单轮截断: {len(filtered)} → {DOWNLOAD_CAP_PER_RUN} 张（余量下轮继续）")
-        filtered = filtered[:DOWNLOAD_CAP_PER_RUN]
+    # 单频道单轮截断（百分比系数）：仅增量模式生效——全量兜底的 limit=200
+    # 本身就是兜底上限，再截会静默丢老图（2026-11-06 新频道首拉事故根因）。
+    # 公式 min(积压, max(50, 积压×40%))：200→80/轮 3 轮完，500→200/轮，
+    # 日常 5~30 条一轮全拉。余量保持在水位之下，下轮增量自然续上。
+    if apply_pct_cap and len(filtered) > DOWNLOAD_CAP_MIN:
+        cap = max(DOWNLOAD_CAP_MIN, round(len(filtered) * DOWNLOAD_CAP_PCT + 0.5))
+        if len(filtered) > cap:
+            print(f"单轮截断: {len(filtered)} → {cap} 张（{int(DOWNLOAD_CAP_PCT*100)}%系数，余量下轮继续）")
+            filtered = filtered[:cap]
 
     if not filtered:
         print("没有找到图片")
@@ -1429,7 +1419,10 @@ def main() -> None:
             break
 
         if export_ok:
-            filter_and_download(export_file, DOWNLOAD_DIR, channel, limit, md5_cache, progress_cache, bad_cache)
+            # 全量兜底（无 last_id）不吃百分比截断：limit=200 已是兜底上限
+            had_last_id = bool(progress_cache.get(channel, {}).get("last_id"))
+            filter_and_download(export_file, DOWNLOAD_DIR, channel, limit, md5_cache,
+                                progress_cache, bad_cache, apply_pct_cap=had_last_id)
 
         if os.path.exists(export_file):
             os.remove(export_file)
