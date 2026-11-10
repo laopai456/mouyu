@@ -42,10 +42,9 @@ CHANNELS = {
 # 每频道拉取频次（防风控调度，2026-11 起随封号对策加入）：量大频道每日拉，其余
 # 1~2 天随机间隔，避免固定节奏。量小频道拉得勤只是白付握手税+流量指纹，无收益。
 # 调整频道分组只动这两个配置；--all-now 可临时忽略调度全拉。
-# 每日组（2026-11-05 扩）：时效性优先——梗图频道日更日拉；douban_read
-# 非时效性留随机组
-CHANNEL_PULL_DAILY = {"xinjingdaily", "wtmsd", "jandan_pic",
-                      "fucku_idiot", "rvalue_daily", "acgdaily"}
+# 2026-11-11 用户决策：10 个频道全部每日组、取消错峰——时效性完全优先
+# （随机组机制保留备用，当前为空）
+CHANNEL_PULL_DAILY = set(CHANNELS.keys())
 CHANNEL_PULL_RANDOM_DAYS = (1, 2)
 
 # 单频道单轮下载截断（2026-11-10 百分比系数版）：增量积压时单轮拉
