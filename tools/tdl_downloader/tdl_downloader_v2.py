@@ -52,6 +52,11 @@ CHANNEL_PULL_RANDOM_DAYS = (1, 2)
 # liveness_report 打 [频道停更] WARN；仅提示，移出 CHANNELS 由用户拍板。
 CHANNEL_DEAD_DAYS = 3
 
+# 时效门槛（用户决策 2026-11-11）：只下载最近 N 天内发布的图，不无限回溯——
+# 超 3 天的积压直接放弃（水位越过，有意丢弃）。与 CHANNEL_DEAD_DAYS 同值
+# 但语义独立：一个管「弃拉什么」，一个管「判谁死」。
+DOWNLOAD_MAX_AGE_DAYS = 3
+
 # 单频道单轮下载截断（2026-11-10 百分比系数版）：增量积压时单轮拉
 # max(保底, 积压×百分比)，大积压按比例加速消化（任意积压 ≤3 轮清完），
 # 小增量（日常 5~30 条）不受影响。全量兜底模式不受此限（其 limit=200
@@ -635,6 +640,14 @@ def _strip_tdl_name_prefix(filename: str) -> str:
     return _TDL_NAME_PREFIX_RE.sub("", filename, count=1)
 
 
+def _msg_ts(msg: dict) -> float:
+    """导出消息的 date → unix 秒；脏数据返 0（会被时效门槛当超龄丢弃）。"""
+    try:
+        return float(msg.get("date") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def filter_and_download(
     export_file: str, download_dir: str, channel: str, limit: int,
     md5_cache: dict, progress_cache: dict, bad_cache: dict,
@@ -656,8 +669,40 @@ def filter_and_download(
     ]
     print(f"图片消息数: {len(file_list)}")
 
+    # 时效门槛（用户决策 2026-11-11）：只下最近 DOWNLOAD_MAX_AGE_DAYS 天内的图，
+    # 不无限回溯——超龄积压直接放弃。水位取保留列表的 max id：TG 消息 id 随时间
+    # 单调递增，弃拉旧图的 id 必小于保留图，水位自然越过它们（有意丢弃，非
+    # 11-06 式静默丢失）。
+    max_img_ts = max((_msg_ts(m) for m in file_list), default=0.0)  # 整批最新图时间（含超龄）
+    cutoff_ts = time.time() - DOWNLOAD_MAX_AGE_DAYS * 86400
+    fresh_list = [m for m in file_list if _msg_ts(m) >= cutoff_ts]
+    dropped_old = len(file_list) - len(fresh_list)
+    if dropped_old:
+        print(f"[时效门槛] 弃拉超龄旧图 {dropped_old} 张（>{DOWNLOAD_MAX_AGE_DAYS} 天），只下最近 {DOWNLOAD_MAX_AGE_DAYS} 天")
+    file_list = fresh_list
+
     if not file_list:
-        print("没有找到图片")
+        if dropped_old:
+            # 整批超龄：明确弃拉。必须推进水位到导出 max id 并写下轮到期日，
+            # 否则水位不动、下轮重复扫同一窗（11-10 死循环模式）。同时记
+            # last_img_ts（超龄值，单调只增不减）让停更体检能判它死群。
+            max_all_id = max(
+                (m.get("id", 0) for m in messages if isinstance(m.get("id", int), int)),
+                default=0,
+            )
+            if max_all_id > 0:
+                prev_ts = float(progress_cache.get(channel, {}).get("last_img_ts") or 0)
+                progress_cache[channel] = {
+                    "last_id": max_all_id,
+                    "last_time": datetime.now().isoformat(),
+                    # 整本替换会抹掉旧 last_img_ts，取单调 max 回填（本批超龄时保旧值）
+                    "last_img_ts": max(max_img_ts, prev_ts),
+                }
+                mark_pulled(progress_cache, channel)
+                save_json_cache(PROGRESS_CACHE_FILE, progress_cache)
+                print(f"[时效门槛] 本批 {dropped_old} 张全部超龄，弃拉并推进水位至 {max_all_id}（不回溯）")
+        else:
+            print("没有找到图片")
         return
 
     sequential_files = _build_sequential_groups(file_list)
@@ -793,14 +838,11 @@ def filter_and_download(
     else:
         print(f"下载完成: 新增 {downloaded} 张, 跳过重复 {skipped} 张")
 
-    # 停更体检数据（顺手，零额外流量）：记录本轮导出里最新图片消息的时间戳。
-    # 取 file_list（整批导出）而非 filtered——截断/黑名单剔除不影响「频道有新图」事实
-    max_img_ts = 0.0
-    for m in file_list:
-        try:
-            max_img_ts = max(max_img_ts, float(m.get("date") or 0))
-        except (TypeError, ValueError):
-            continue
+    # 停更体检数据（顺手，零额外流量）：单调记录最新图片消息时间——只增不减，
+    # 水位重置的全量模式可能导出更旧批次，回写倒退会造成停更误报。
+    # 取 file_list（整批导出过门槛后的保留列表）而非 filtered——截断/黑名单剔除
+    # 不影响「频道有新图」事实。
+    prev_ts = float(progress_cache.get(channel, {}).get("last_img_ts") or 0)
 
     # 水位=本轮实际处理列表(filtered，含截断/黑名单剔除后)的 max id，而非整批
     # 导出的 max——单轮截断时余量保持在水位之下，下轮增量自然续上，不会丢图
@@ -810,14 +852,15 @@ def filter_and_download(
     )
     if max_id > 0:
         if dl_ok:
+            prev_ts = float(progress_cache.get(channel, {}).get("last_img_ts") or 0)
             progress_cache[channel] = {
                 "last_id": max_id,
                 "last_time": datetime.now().isoformat(),
+                # 整本替换会抹掉旧 last_img_ts，取单调 max 回填（全量兜底拉到更旧批次时保旧值）
+                "last_img_ts": max(max_img_ts, prev_ts),
             }
             # 防风控调度：导出+下载都成功才写下轮到期日；失败则下轮立即重试本频道
             mark_pulled(progress_cache, channel)
-            if max_img_ts:
-                progress_cache[channel]["last_img_ts"] = max_img_ts
             save_json_cache(PROGRESS_CACHE_FILE, progress_cache)
             print(f"已记录进度: 频道 {channel} 最后消息ID: {max_id}")
         else:
@@ -826,8 +869,9 @@ def filter_and_download(
     else:
         # 无新消息：导出往返已成功，同样写到期日——否则沉默频道每轮都到期，
         # 天天被重复导出，分频调度对它们形同虚设
-        if max_img_ts:
-            progress_cache.setdefault(channel, {})["last_img_ts"] = max_img_ts
+        new_ts = max(max_img_ts, prev_ts)
+        if new_ts:
+            progress_cache.setdefault(channel, {})["last_img_ts"] = new_ts
         mark_pulled(progress_cache, channel)
         save_json_cache(PROGRESS_CACHE_FILE, progress_cache)
 
