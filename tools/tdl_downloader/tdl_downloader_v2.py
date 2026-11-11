@@ -35,8 +35,8 @@ CHANNELS = {
     "jandan_pic": 200,
     "fucku_idiot": 200,
     "rvalue_daily": 200,
-    "douban_read": 200,
     "acgdaily": 200,
+    # douban_read 已移出（2026-11-11）：最后消息 2026-04-08，停更 217 天实锤死群
 }
 
 # 每频道拉取频次（防风控调度，2026-11 起随封号对策加入）：量大频道每日拉，其余
@@ -46,6 +46,11 @@ CHANNELS = {
 # （随机组机制保留备用，当前为空）
 CHANNEL_PULL_DAILY = set(CHANNELS.keys())
 CHANNEL_PULL_RANDOM_DAYS = (1, 2)
+
+# 停更判定阈值（口径=用户定义 2026-11-11）：图片消息超此天数未更新 → 判疑似死群。
+# 体检随每轮下载顺手做（复用导出记录的 last_img_ts，零额外 tdl 流量），
+# liveness_report 打 [频道停更] WARN；仅提示，移出 CHANNELS 由用户拍板。
+CHANNEL_DEAD_DAYS = 3
 
 # 单频道单轮下载截断（2026-11-10 百分比系数版）：增量积压时单轮拉
 # max(保底, 积压×百分比)，大积压按比例加速消化（任意积压 ≤3 轮清完），
@@ -788,6 +793,15 @@ def filter_and_download(
     else:
         print(f"下载完成: 新增 {downloaded} 张, 跳过重复 {skipped} 张")
 
+    # 停更体检数据（顺手，零额外流量）：记录本轮导出里最新图片消息的时间戳。
+    # 取 file_list（整批导出）而非 filtered——截断/黑名单剔除不影响「频道有新图」事实
+    max_img_ts = 0.0
+    for m in file_list:
+        try:
+            max_img_ts = max(max_img_ts, float(m.get("date") or 0))
+        except (TypeError, ValueError):
+            continue
+
     # 水位=本轮实际处理列表(filtered，含截断/黑名单剔除后)的 max id，而非整批
     # 导出的 max——单轮截断时余量保持在水位之下，下轮增量自然续上，不会丢图
     max_id = max(
@@ -802,6 +816,8 @@ def filter_and_download(
             }
             # 防风控调度：导出+下载都成功才写下轮到期日；失败则下轮立即重试本频道
             mark_pulled(progress_cache, channel)
+            if max_img_ts:
+                progress_cache[channel]["last_img_ts"] = max_img_ts
             save_json_cache(PROGRESS_CACHE_FILE, progress_cache)
             print(f"已记录进度: 频道 {channel} 最后消息ID: {max_id}")
         else:
@@ -810,6 +826,8 @@ def filter_and_download(
     else:
         # 无新消息：导出往返已成功，同样写到期日——否则沉默频道每轮都到期，
         # 天天被重复导出，分频调度对它们形同虚设
+        if max_img_ts:
+            progress_cache.setdefault(channel, {})["last_img_ts"] = max_img_ts
         mark_pulled(progress_cache, channel)
         save_json_cache(PROGRESS_CACHE_FILE, progress_cache)
 
@@ -927,6 +945,32 @@ def mark_pulled(progress_cache: dict, channel: str) -> None:
     progress_cache.setdefault(channel, {})["next_pull"] = (
         date.today() + timedelta(days=interval)
     ).isoformat()
+
+
+def liveness_report(progress_cache: dict) -> list[str]:
+    """停更体检（每轮下载顺手做，零额外流量）：复用进度里记录的 last_img_ts
+    （每轮导出的最新图片消息时间），超 CHANNEL_DEAD_DAYS 天没图的频道判疑似死群。
+    固定关键词 [频道停更] 便于 grep。仅提示不自动移出——频道清单变更由用户拍板。
+    新频道首轮拉取前无记录，不误报。
+    """
+    dead = []
+    for ch in CHANNELS:
+        ts = progress_cache.get(ch, {}).get("last_img_ts")
+        if not ts:
+            continue
+        try:
+            days = (time.time() - float(ts)) / 86400
+        except (TypeError, ValueError):
+            continue  # 脏数据不误报
+        if days >= CHANNEL_DEAD_DAYS:
+            dead.append(ch)
+            last = datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d")
+            print(f"[频道停更][WARN] {ch} 已 {days:.0f} 天没图（最后 {last}），疑似停更，建议移出 CHANNELS")
+    if dead:
+        print(f"[频道停更][WARN] 共 {len(dead)} 个频道疑似停更: {', '.join(dead)}")
+    else:
+        print(f"[频道体检] 全部 {len(CHANNELS)} 个频道图片更新正常（阈值 {CHANNEL_DEAD_DAYS} 天）")
+    return dead
 
 
 def check_tdl_login() -> str:
@@ -1430,6 +1474,9 @@ def main() -> None:
 
         if os.path.exists(export_file):
             os.remove(export_file)
+
+    # 停更体检：复用本轮导出记录的图片时间戳，死群打 [频道停更] WARN（零额外 tdl 流量）
+    liveness_report(progress_cache)
 
     print("\n\n完成!")
 
