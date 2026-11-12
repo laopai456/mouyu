@@ -2,11 +2,12 @@ import os
 import sys
 import time
 import json
+import shutil
 import hashlib
 import logging
 import io
 import warnings
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # requests 启动时自检依赖版本（urllib3/chardet）发的提示性告警，不影响功能；
@@ -19,6 +20,69 @@ from qcloud_cos import CosS3Client
 from tencentcloud.common import credential
 from tencentcloud.scf.v20180416 import scf_client, models
 
+# ── pHash 近重复门（2026-11-12，方案沿用 tdl_downloader_v2.py 11-04 验证过的实现）──
+# md5 只抓字节级重复，重压缩/缩放/加水印的同梗图（跨来源：QQ/煎蛋/tdl 互转）照样进库。
+# 本门在 md5 双重查重（本地+服务端）之后、COS 上传之前比对感知哈希：汉明距离
+# ≤ PHASH_THRESHOLD 判近重复，移入隔离区（不删可回捞）。缓存独立于 downloader
+# 的 cache/phash_cache.json——两进程可能并发运行，各自独立文件互不写冲突。
+PHASH_THRESHOLD = 8
+PHASH_WINDOW_HOURS = 72  # 比 downloader 的 48h 稍宽：进库前最后一道门，覆盖跨来源流行期
+PHASH_CACHE_FILE = Path(__file__).parent / 'cache' / 'phash_cache.json'
+# 隔离区必须在全部 watch_folders 之外：uploader os.walk 递归扫描，放里面会被捞走重传
+UPLOAD_DUPLICATES_DIR = r"C:\Users\w\Downloads\upload_duplicates"
+
+
+def _load_phash_cache():
+    """载入指纹库并按滚动窗口裁剪：只留近 PHASH_WINDOW_HOURS 的指纹，流行期外的
+    重复按衰减模型放弃（同 downloader 语义）。脏记录丢弃，损坏缓存重建空库。"""
+    if not PHASH_CACHE_FILE.exists():
+        return {}
+    try:
+        with open(PHASH_CACHE_FILE, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+    except Exception:
+        print("[pHash门] ⚠ 指纹缓存损坏，重建空库")
+        return {}
+    cutoff = datetime.now() - timedelta(hours=PHASH_WINDOW_HOURS)
+    cache = {}
+    for h, v in raw.items():
+        if not isinstance(v, dict) or not isinstance(v.get('time'), str):
+            continue
+        try:
+            if datetime.fromisoformat(v['time']) >= cutoff:
+                cache[h] = v
+        except ValueError:
+            continue
+    return cache
+
+
+def _save_phash_cache(cache):
+    PHASH_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(PHASH_CACHE_FILE, 'w', encoding='utf-8') as f:
+        json.dump(cache, f, ensure_ascii=False)
+
+
+def _phash_of(file_path):
+    """感知哈希（64bit int）；imagehash 缺失或解码失败返 None → 门放行（fail-open）"""
+    try:
+        import imagehash
+        with Image.open(file_path) as im:
+            return int(str(imagehash.phash(im)), 16)
+    except Exception:
+        return None
+
+
+def _phash_match(ph, phash_ints):
+    """线性扫描汉明距离 ≤ PHASH_THRESHOLD 的最近命中，返 (hash_hex, dist) 或 None。
+    库容=72h 上传量（几百条），逐张比对成本可忽略。"""
+    best = None
+    for h, v in phash_ints:
+        d = (ph ^ v).bit_count()
+        if d <= PHASH_THRESHOLD and (best is None or d < best[1]):
+            best = (h, d)
+    return best
+
+
 class ImageUploader:
     def __init__(self, config):
         self.config = config
@@ -26,6 +90,10 @@ class ImageUploader:
         self.developer_openid = config['developer_openid']
         self.md5_cache_file = Path(__file__).parent / 'cache' / 'md5_cache.json'
         self.md5_cache = self.load_md5_cache()
+        # pHash 指纹库：批起跑时窗口裁剪一次，批末统一落盘
+        self.phash_cache = _load_phash_cache()
+        self.phash_ints = [(h, int(h, 16)) for h in self.phash_cache]
+        self._phash_gate_skipped = 0
         self.setup_logging()
         self.setup_cos_client()
         
@@ -101,6 +169,51 @@ class ImageUploader:
             del self.md5_cache[md5]
         self.save_md5_cache()
         self.logger.warning(f"UPLOAD_CACHE_PURGE 清理上月及更早台账 {len(old)} 条，保留本月 {len(self.md5_cache)} 条")
+
+    def save_phash_cache(self):
+        _save_phash_cache(self.phash_cache)
+
+    def phash_gate(self, file_path):
+        """近重复门：True=命中并已隔离/删除（调用方按 duplicate 处理）；False=放行。
+        fail-open：算不出指纹（imagehash 缺失/解码失败）时放行上传，绝不因门断粮。"""
+        ph = _phash_of(file_path)
+        if ph is None:
+            self._phash_gate_skipped += 1
+            if self._phash_gate_skipped == 1:
+                self.logger.warning("pHash 指纹计算失败（imagehash 缺失或图片解码失败），同类图跳过比对直传")
+            return False
+        hit = _phash_match(ph, self.phash_ints)
+        name = Path(file_path).name
+        if hit:
+            h, d = hit
+            src = self.phash_cache.get(h, {})
+            self.logger.warning(
+                f"[pHash门] 近重复(距离{d}≤{PHASH_THRESHOLD})，隔离不上传: {name} "
+                f"← 库内 {src.get('source', '?')}/{src.get('file', '?')}"
+            )
+            try:
+                os.makedirs(UPLOAD_DUPLICATES_DIR, exist_ok=True)
+                shutil.move(file_path, os.path.join(UPLOAD_DUPLICATES_DIR, name))
+            except (OSError, shutil.Error) as e:
+                # 隔离失败（目标占用等）：退而删除原图，防 watch 目录每轮重扫；删不动则跳过
+                self.logger.error(f"隔离移动失败: {e}，尝试直接删除")
+                try:
+                    os.remove(file_path)
+                except OSError as e2:
+                    self.logger.error(f"删除也失败，本图跳过: {e2}")
+                    return 'skipped'
+            return True
+        # 新图：指纹入库（source=所在 watch 目录的 description，用于后续命中归因）
+        src_desc = ''
+        for folder in self.config.get('watch_folders', []):
+            if folder.get('enabled') and str(file_path).startswith(folder.get('path', '')):
+                src_desc = folder.get('description', '')
+                break
+        self.phash_cache[f"{ph:016x}"] = {
+            'file': name, 'source': src_desc, 'time': datetime.now().isoformat()
+        }
+        self.phash_ints.append((f"{ph:016x}", ph))
+        return False
     
     def is_image(self, file_path):
         ext = Path(file_path).suffix.lower().lstrip('.')
@@ -204,6 +317,11 @@ class ImageUploader:
                     os.remove(file_path)
                 except Exception as e:
                     self.logger.error(f"删除{reason}图片失败: {e}")
+                return 'duplicate'
+
+            # pHash 近重复门：md5 双重查重抓不住的重压缩/缩放同梗图在这里拦下。
+            # 命中折进 duplicate 统计（summary 行格式不动，GUI 正则依赖它）。
+            if self.phash_gate(file_path):
                 return 'duplicate'
 
             file_ext = Path(file_path).suffix.lower()
@@ -470,6 +588,7 @@ def main():
     print("✓ 自动上传完成: " + ", ".join(f"{label[k]} {total_stats[k]}" for k in ('uploaded', 'duplicate', 'skipped', 'failed')))
     print("="*50)
     print()
+    event_handler.save_phash_cache()
 
 if __name__ == "__main__":
     main()

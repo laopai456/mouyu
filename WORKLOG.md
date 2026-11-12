@@ -2,6 +2,14 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-11-12（补）uploader 加 pHash 近重复门——相似度去重收口到唯一进库口
+
+- **需求**：用户「在原来 md5 的基础上加图片相似度比对去重」。现状盘点：相似度门只有 tdl 链路有，QQ/煎蛋/手动投稿全靠字节级 md5。选定方案 A：所有来源都过 uploader 这一个口，在进库前拦（方案 B 存量扫描 / C 云端 phash 字段改造，另行立项不做）。
+- **改动**（`tools/uploader/uploader.py` 单文件 + requirements）：①常量 `PHASH_THRESHOLD=8`（同 downloader）、`PHASH_WINDOW_HOURS=72`（比 downloader 48h 稍宽——进库前最后一道门，覆盖跨来源流行期）、独立缓存 `cache/phash_cache.json`（两进程并发不写冲突）、隔离区 `Downloads\upload_duplicates`（在全部 watch 根之外，os.walk 不会捞回）；②自包含函数组（载入裁剪/落盘/算指纹/最近距离匹配/门），实现参照 tdl_downloader_v2.py 验证过的模式；③挂钩 `upload_image()`：本地+服务端 md5 双查重之后、压缩上传之前，命中→隔离+计入 duplicate；④fail-open：指纹算不出（依赖缺失/解码失败）放行直传，绝不因门断粮；⑤批末落盘。
+- **GUI 兼容（硬约束）**：summary 行 `共 X 张: ...` 与 `✓` 前缀格式逐字未动——gui.py:80-86 正则解析 stdout；pHash 隔离折进「重复」计数，明细走 `[pHash门]` 前缀日志（WARNING 级，文件+控制台都有）。改 uploader 脚本无需重打包 exe。
+- **验证**：py_compile 过；.venv python 离线冒烟 8 项全过（新图入库/近重复隔离含来源归因/无关图放行/落盘重载一致/72h 过期裁剪/fail-open/隔离区在 watch 根外/summary 格式守护）。踩坑：合成图太素（纯渐变）pHash 距离 30 误判不相似，换结构化合成图（形状+噪声点）距离 0——合成图做 pHash 测试必须带高频纹理。
+- **效果**：跨来源（QQ↔tdl↔煎蛋互转）重压缩同梗图在进库前被拦进 `Downloads\upload_duplicates`（不删可回捞）；存量库的历史盲区仍在（前向积累+72h 窗口语义），后续靠方案 B/C。
+
 ## 2026-11-12 acgdaily 抖动失败当场补拉 + 网络退避重试 + tasklist GBK 崩溃修复
 
 - **现场**：GUI 下载轮 acgdaily 失败（`retry limit reached`＝代理节点抖动，memory 有档案），当场诊断代理链路健康（TG 走 17891 代理 302/1.05s）后用 `--auto` 补拉成功（+18 张，水位推进 60569）。

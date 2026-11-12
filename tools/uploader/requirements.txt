@@ -3,3 +3,4 @@ requests==2.31.0
 Pillow==10.0.0
 cos-python-sdk-v5==1.9.30
 tencentcloud-sdk-python==3.0.1450
+imagehash==4.3.2
