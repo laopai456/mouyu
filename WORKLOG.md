@@ -2,6 +2,14 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-11-12 acgdaily 抖动失败当场补拉 + 网络退避重试 + tasklist GBK 崩溃修复
+
+- **现场**：GUI 下载轮 acgdaily 失败（`retry limit reached`＝代理节点抖动，memory 有档案），当场诊断代理链路健康（TG 走 17891 代理 302/1.05s）后用 `--auto` 补拉成功（+18 张，水位推进 60569）。
+- **顺手撞出存量 bug**：`check_shared_key_clients` 的 `tasklist` 调用 `text=True` 无显式编码——GUI 的 .venv 走 GBK 默认从没炸过，UTF-8 模式环境（如 ZCode shell）下 GBK 输出炸读线程 → `out=None` → `.lower()` AttributeError，**拉取开始前就崩**。修：显式 `encoding="utf-8", errors="replace"`（只搜 ASCII 的 Telegram.exe，无损）。
+- **网络退避重试**（用户「波动频繁，能当场维护嘛」的固化）：dl 非卡死的普通失败＝节点抖动，原地退避 60~150s 重试一次（`NETWORK_BACKOFF_ROUNDS=1`，`[网络退避]` 固定关键词）；重试用尽才放弃本批——水位不推进、下轮自动重试，fail-safe 兜底不变。与坏文件剔除（.tmp 卡死）语义分离：坏文件重试无意义，网络抖动重试有意义。持续性断网最坏每频道 +2.5min。
+- **验证**：py_compile 过；冒烟 4 项过（抖动→退避重试成功且水位推进/持续失败→退避后放弃且水位不动/正常路径零退避开销/check_shared_key_clients 冒烟）。补拉实测过（18 张落地）。
+- **注意**：补拉是 ZCode shell 的系统 python 跑的，没装 imagehash → 4 张图 pHash 门被跳过（仅 MD5 去重生效）。GUI 正常用 VENV_PYTHON 跑不受影响；这 4 张若有漏网近重复，量级可忽略。
+
 ## 2026-11-11（补2）时效门槛：只下最近 3 天，不无限回溯（用户决策）
 
 - **用户决策**：不需要无限往上拉图，只下载最近三天内的，设门槛。

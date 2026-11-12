@@ -66,6 +66,13 @@ DOWNLOAD_MAX_AGE_DAYS = 3
 DOWNLOAD_CAP_MIN = 50
 DOWNLOAD_CAP_PCT = 0.7
 
+# 网络退避重试（2026-11-12）：dl 非卡死的普通失败多为代理节点抖动（memory:
+# tdl retry limit=网络/代理问题，重跑无损），原地退避 60~150s 等它自愈再试；
+# 持续性断网则放弃本批——水位不推进、下轮自动重试，fail-safe 兜底不变。
+# 与坏文件剔除分离：卡死(.tmp)重试无意义（剔除逻辑兜底），网络抖动重试有意义。
+NETWORK_BACKOFF_ROUNDS = 1
+NETWORK_BACKOFF_SECONDS = (60, 150)
+
 # 同一轮里相邻频道之间的随机间歇（秒）：5 个频道背靠背连跑是机器节拍，
 # 散布成几十分钟的零散活动更像真人。仅影响单轮总时长，不影响结果。
 CHANNEL_GAP_SECONDS = (90, 300)
@@ -763,8 +770,11 @@ def filter_and_download(
     need_download_count = len(pending_filenames) - len(already_exist)
 
     dl_ok = False
-    # 坏文件剔除循环：tdl 卡在某文件死重试时，识别遗留的 .tmp，
-    # 把对应文件从列表剔除后重试，避免因单个坏文件卡死整个频道
+    # 网络退避计数（非卡死失败原地重试用）；坏文件剔除循环：tdl 卡在某文件
+    # 死重试时，识别遗留的 .tmp，把对应文件从列表剔除后重试，避免因单个坏
+    # 文件卡死整个频道。退避 continue 会占用一轮 bad_round 配额，极端情况
+    # （先退避又连续卡死）坏文件轮数少一轮，可接受。
+    net_retries = 0
     for bad_round in range(MAX_BAD_FILE_ROUNDS):
         cmd = [TDL_PATH, "dl", "-f", filtered_file, "-d", download_dir,
                "--skip-same", "-t", str(DOWNLOAD_THREADS)] + _tdl_base_args()
@@ -775,7 +785,19 @@ def filter_and_download(
             no_output_timeout=DOWNLOAD_NO_OUTPUT_TIMEOUT, max_retries=1,
         )
         dl_ok = dl_ok or ok
-        if ok or not stuck:
+        if ok:
+            break
+        if not stuck:
+            # 非卡死的普通失败：多为代理节点抖动，退避后原地重试一次；
+            # 重试用尽才放弃本批（水位未推进，下轮自动重试）
+            if net_retries < NETWORK_BACKOFF_ROUNDS:
+                net_retries += 1
+                wait = random.randint(*NETWORK_BACKOFF_SECONDS)
+                print(f"[网络退避] 下载失败(非卡死)，疑似节点抖动，{wait}s 后原地重试 "
+                      f"({net_retries}/{NETWORK_BACKOFF_ROUNDS})")
+                time.sleep(wait)
+                continue
+            print("网络退避重试用尽，放弃本批（水位未推进，下轮自动重试）")
             break
 
         # 卡死终止：扫描 .tmp 残留，剔除对应文件后进入下一轮
@@ -947,6 +969,7 @@ def check_shared_key_clients(auto_close: bool = False) -> None:
         out = subprocess.run(
             ["tasklist", "/FI", f"IMAGENAME eq {client}"],
             capture_output=True, text=True,
+            encoding="utf-8", errors="replace",  # tasklist 输出可能含 GBK（中文进程名），UTF-8 环境下不 replace 会炸读线程
         ).stdout
         if client.lower() not in out.lower():
             continue
