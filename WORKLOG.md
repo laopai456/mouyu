@@ -2,6 +2,14 @@
 
 > 工作日志，最新在前。任务完成或归档时在顶部追加一条。新对话先读这里续接。
 
+## 2026-11-12（补3）煎蛋爬虫断系统代理劫持——节点抖动不再陪葬国内直连流量
+
+- **现象**（用户贴 13:56-14:05 日志）：`JANDAN_BACKOFF ProxyError('Unable to connect to proxy', RemoteDisconnected)` + 一次 SSLError(SSLEOF)；其间 IMG_SKIP 无效资源若干（无害，既有档案）。
+- **根因**：`requests.Session()` 默认 trust_env=True → 经 urllib.getproxies() 读 Windows 注册表系统代理（当时 ON→17891）。煎蛋与图床全是国内站，流量却被劫进 VPN 隧道——节点一抖整个爬虫陪葬。与 qq_collector（qqbot b34123a）、httpx（mouyu uploader/downloader）同一类病，本仓库最后一个未设防的出网点。
+- **修复**（`tools/jandan/jandan_scraper.py:191` 区）：`self.sess.trust_env = False`——煎蛋全链路国内直连。
+- **验证**：py_compile 过；live 验证 ①`getproxies()` 此刻确实返回 17891（劫持坐实）②trust_env=False 直连拉取日志中的失败 URL 畅通（返回 404/HTML——该图图床侧真失效，IMG_SKIP 判级正确，非网络故障）。
+- **注意**：JANDAN_BACKOFF 退避自愈一直在正常工作（无 BREAKER＝未被限流）；现有 memory 档案 `proxy-stuck-boot-breaks-python-http` 已覆盖此类病的通用机理。
+
 ## 2026-11-12（补）uploader 加 pHash 近重复门——相似度去重收口到唯一进库口
 
 - **需求**：用户「在原来 md5 的基础上加图片相似度比对去重」。现状盘点：相似度门只有 tdl 链路有，QQ/煎蛋/手动投稿全靠字节级 md5。选定方案 A：所有来源都过 uploader 这一个口，在进库前拦（方案 B 存量扫描 / C 云端 phash 字段改造，另行立项不做）。

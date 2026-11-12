@@ -189,6 +189,11 @@ class JandanScraper:
         self.stop_reason = None
 
         self.sess = requests.Session()
+        # trust_env=False：无视 Windows 系统代理。requests 默认经 urllib.getproxies()
+        # 读注册表代理（ProxyEnable），VPN 节点抖动/掉线时被劫进隧道的国内流量跟着
+        # 陪葬（11-12 13:59 ProxyError RemoteDisconnected 实案）。煎蛋与各图床全是
+        # 国内直连，本就无需代理。
+        self.sess.trust_env = False
         self.sess.headers.update({
             "User-Agent": random.choice(UA_POOL),
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
